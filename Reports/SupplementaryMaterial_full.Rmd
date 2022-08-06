@@ -1,0 +1,79 @@
+---
+title: "Supplementary Methods & Results"
+subtitle: "Diagnosing early-onset neonatal sepsis in low-resource settings: development of a multivariable prediction model"
+author: "Neal SR et al."
+date: "06/08/2022"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    number_sections: yes
+    toc: yes
+    toc_depth: 1
+    
+    df_print: tibble
+    highlight: tango
+fontsize: 10pt
+geometry: margin=1in
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{afterpage}
+---
+
+\newpage
+
+# Neotree data collection
+
+```{r child="1-NeotreeDataCollection.Rmd"}
+```
+
+\newpage
+
+# Candidate predictors
+
+```{r child="2-CandidatePredictors.Rmd"}
+```
+
+\newpage
+
+# Preliminary data cleaning
+
+```{r child="3-PreliminaryCleaning.Rmd"}
+```
+
+\newpage
+
+# Record linkage
+
+```{r child="4-RecordLinkage.Rmd"}
+```
+
+\newpage
+
+# Further data cleaning
+
+```{r child="5-FurtherCleaning.Rmd"}
+```
+
+\newpage
+
+# Missing data
+
+```{r child="6-MissingData.Rmd"}
+```
+
+\newpage
+
+# Descriptive statistics
+
+```{r child="7-DescriptiveStatistics.Rmd"}
+```
+
+\newpage
+
+# Model development and performance
+
+```{r child="8-Modelling.Rmd"}
+```
+
+

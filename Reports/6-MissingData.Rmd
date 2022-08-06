@@ -1,0 +1,320 @@
+---
+title: "6-MissingData"
+output:
+  pdf_document:
+    number_sections: yes
+    df_print: tibble
+    latex_engine: xelatex
+---
+
+```{r setup6, include=FALSE}
+library("knitr")
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, out.width="50%")
+# Set root directory from Rmd dir to project dir
+opts_knit$set(root.dir = "..")
+```
+
+```{r libraries6, include=FALSE}
+source("Scripts/0-setup.R")
+```
+
+```{r data6, include=FALSE}
+dat <- readRDS("Data/prepare2_dat.rds")
+```
+
+Description of missing data analysis.
+
+## Assess missingness
+
+### Visualise data frame
+
+A graphical representation of the data types and proportion of missing values
+for each variable is shown below. Ancillary variables that are not required for
+modelling are not shown. Variables in the data frame are plotted on the x-axis
+and each observation (i.e. participant) is plotted on the y-axis. Missing values
+are shaded grey.
+
+```{r visualise}
+# Ancillary variables (non-predictor, non-outcome)
+# Unimportant if there are missing values for these
+anc_vars <- c(
+  "adm_session",
+  "adm_uid",
+  "adm_datetime",
+  "pi_sex",
+  "pi_age",
+  "pi_type",
+  "pi_admreason",
+  "oh_delivery",
+  "dis_session",
+  "dis_uid",
+  "outcome",
+  "outcome_datetime",
+  "adm_dur",
+  "time",
+  "diagnosis",
+  "diagnosis_other",
+  "diagnosis2",
+  "diagnosis2_other",
+  "cause_death",
+  "cause_death_other",
+  "cause_death2",
+  "cause_death2_other"
+  )
+
+# Candidate predictor and outcome variables (model variables)
+model_vars <- names(dat)[!names(dat) %in% anc_vars]
+
+# Data frames
+anc_df <- dat %>% select(all_of(anc_vars))
+model_df <- dat %>% select(all_of(model_vars))
+
+vis_dat(model_df)
+```
+
+### Variable-wise missingness
+
+The number and percentage of missing values for each variable is shown below.
+In total, `r sum(miss_var_summary(model_df)$pct_miss > 0)` variables had
+missing values.
+
+```{r vmiss}
+model_df %>% miss_var_summary() %>% print(n = Inf)
+```
+
+### Case-wise missingness
+
+Most participants had no missing data and, among those who did, the majority
+were only missing values for one predictor (most commonly temperature at
+admission).
+
+```{r na_patterns}
+model_df %>% miss_case_table() %>% print(n = Inf)
+
+aggr_plot <- model_df %>%
+  select(which(colMeans(is.na(.)) > 0)) %>%
+  VIM::aggr(plot = FALSE)
+
+plot(
+  aggr_plot,
+  sortVars = T,
+  col=c("grey", mdc(2)),
+  numbers = TRUE,
+  prop = c(TRUE, FALSE),
+  cex.axis = .8,
+  gap = 3,
+  oma = c(6,5,1,2))
+
+na_patterns <- Hmisc::naclus(model_df)
+Hmisc::naplot(na_patterns, which=c("na per obs"), col = "red")
+```
+
+The dendrogram below shows predictors that were commonly missing together.
+
+```{r na_patterns2}
+plot(na_patterns, ylab = "Fraction of NAs in common", col = "red")
+```
+
+### Relationship between missing temperature and the study outcome
+
+There was no evidence of an association between having a missing value for
+temperature at admission and the primary outcome of early-onset sepsis:
+
+```{r na_outcome, message=FALSE}
+dat <- dat %>%
+  mutate(na_temp = if_else(is.na(et_temp), 1, 0))
+
+table(dat$na_temp, dat$sepsis)
+
+na_mod1 <- glm(sepsis ~ na_temp, data = dat, family = "binomial")
+summary(na_mod1)
+tbl_regression(na_mod1, exponentiate = TRUE)
+```
+
+### Relationship between missing temperature and time
+
+Towards the start of the Neotree project, there was a limited number of
+thermometers available to measure temperature and, therefore, time since the
+start of the study is a plausible predictor of missingness.
+
+Indeed, most missing values for temperature at admission occurred near the start
+of data collection. This suggests that temperature was missing at random (MAR)
+conditional on time since start of the project.
+
+The matrix plot below shows missing values in red, with each participant sorted
+by their admission date (i.e. time since the start of data collection).
+
+```{r na_time}
+dat %>%
+  select(all_of(model_vars), time) %>%
+  select(which(colMeans(is.na(.)) > 0), sepsis, time) %>%
+  VIM::matrixplot(sortby = "time")
+```
+
+Furthermore, the below figure and a logistic regression analysis demonstrate
+that time since the start of data collection was a significant predictor of
+temperature at admission being missing.
+
+Notably, the average recorded temperature was approximately 0.5°C higher during
+the first 100 days compared to the rest of the data collection period. It is
+plausible that, during the first 100 days, healthcare workers were more likely
+to record temperature for ‘sicker’ babies who were thus more likely to have an
+elevated temperature. Nevertheless, a wide range of participant characteristics
+were collected by the Neotree app and were included in the imputation model.
+
+```{r na_time2, message=FALSE}
+dat %>%
+  ggplot(aes(x = time, y = et_temp)) +
+  geom_miss_point() +
+  scale_y_continuous(breaks = seq(30, 40, 1)) +
+  scale_colour_manual(
+    values = c(mdc(2), "grey"),
+    name = "Missingness",
+    labels = c("Missing", "Not missing")
+    ) +
+  geom_smooth(colour = "grey35") +
+  labs(x = "time (days)") +
+  theme_classic2() +
+  theme(legend.position = "bottom") +
+  NULL
+
+na_mod2 <- glm(na_temp ~ time, data = dat, family = "binomial")
+summary(na_mod2)
+tbl_regression(na_mod2, exponentiate = TRUE)
+```
+
+## Impute missing values
+
+The imputation model contained all candidate predictors, the outcome of sepsis,
+and ancillary variables included in the descriptive analysis or that were
+determined to predict missingness (i.e. time, see above).
+
+```{r impute, include=FALSE}
+# Define objects for imputation model --------------------
+
+# Final set of candidate predictors
+predictors <- c(
+  "pi_gest",
+  "et_bw",
+  "oh_matfever",
+  "oh_offliquor",
+  "co_prom",
+  "et_grunt",
+  "et_rr",
+  "et_hr",
+  "et_temp",
+  "oe_activity",
+  "oe_nasalflare",
+  "oe_retractions",
+  "oe_grunt",
+  "oe_wob"
+)
+
+# Excluded predictors
+excluded <- c(
+  "et_cyanosis",
+  "et_seizures",
+  "oe_fontanelle",
+  "oe_colour",
+  "oe_abdodist",
+  "oe_omphalitis",
+  "oe_abskin",
+  "hx_vomit"
+)
+
+# Final candidate predictors with missing values (i.e., to impute)
+impute_vars <- c(
+  "et_temp",
+  "et_bw",
+  "oe_wob",
+  "et_rr",
+  "et_hr",
+  "et_grunt",
+  "oe_nasalflare",
+  "oe_retractions",
+  "oe_grunt",
+  "oh_matfever",
+  "oh_offliquor"
+)
+
+# All variables (i.e., to inform the imputation model)
+inform_vars <- c(
+  predictors,
+  excluded,
+  "sepsis",
+  "time",
+  "pi_sex",
+  "pi_age",
+  "oh_delivery",
+  "outcome"
+)
+
+ivars_df <- dat %>% select(all_of(inform_vars))
+
+# Set MICE parameters --------------------
+
+# Dry run to get defaults
+set.seed(123)
+
+dry_imp <- mice(
+  ivars_df,
+  m = 1,
+  maxit = 0,
+  defaultMethod = c("pmm", "logreg", "polyreg", "polr")
+)
+
+# Get predictor matrix
+pm <- dry_imp$predictorMatrix
+
+# Get methods
+method <- dry_imp$method
+method
+```
+
+Data were assumed to be MAR and 40 imputed datasets were created with 20
+iterations. There is no consensus on the optimal number of imputations for
+multiple imputation, but 40 was chosen based on
+`r round(sum(miss_case_table(model_df)$pct_cases[miss_case_table(model_df)$n_miss_in_case >= 1]), 1)`%
+of participants having at least one missing value.
+
+```{r impute2, include=FALSE}
+# Impute --------------------
+# m = 40, iterations = 20
+set.seed(123)
+
+# Assign output of "5-impute.R" so no need to recompute here...
+
+# imp <- mice(
+#   ivars_df,
+#   m = 40,
+#   maxit = 20,
+#   predictorMatrix = pm,
+#   method = method
+# )
+
+imp <- readRDS("Data/imputed_dfs.rds")
+
+```
+
+The performance of the imputation model is shown below:
+
+```{r impute3}
+print("Imputation method for each variable...")
+imp$method
+
+# Diagnostic plots
+print("Diagnostic plots...")
+
+order <- c("et_temp", "et_bw", "et_rr", "et_hr")
+plot(imp, y = order, layout = c(2,4))
+densityplot(imp, ~ et_temp + et_bw + et_rr + et_hr)
+stripplot(
+  imp,
+  et_temp + et_bw + et_rr + et_hr ~ .imp,
+  col= c("grey", mdc(2)),
+  pch=c(1,20),
+  cex = 1,
+  layout = c(2,2)
+  )
+```
+

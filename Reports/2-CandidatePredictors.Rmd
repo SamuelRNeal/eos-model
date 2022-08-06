@@ -1,0 +1,113 @@
+---
+title: "2-CandidatePredictors"
+output:
+  pdf_document:
+    number_sections: yes
+    df_print: tibble
+    latex_engine: xelatex
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+---
+
+```{r setup2, include=FALSE}
+library("knitr")
+knitr::opts_chunk$set(echo = FALSE)
+# Set root directory from Rmd dir to project dir
+opts_knit$set(root.dir = "..")
+```
+
+\begin{center}
+\begin{longtable}{p{5cm} p{10cm}} 
+ \toprule
+ \textbf{Predictors from literature review \& expert opinion} &
+ \textbf{Mapping to Neotree data (verbatim)} \\ \addlinespace
+ \midrule
+ 
+ \textbf{Risk factors} &  \\ \addlinespace
+ Maternal fever >38°C in labor & ``Tap all risk factors for sepsis present (some
+ you have already asked about) these RFs will guide us on antibiotics" -> ``Maternal
+ fever in labour" \\ \addlinespace
+ 
+ Prolonged rupture of membranes >18 hours & ``When did the membranes rupture?
+ (spontaneously or artificially)" -> ``Did the membranes rupture?" -> ``Yes" ->
+ ``How long between ROM and birth?" -> ``>18 hours" \\ \addlinespace
+ 
+  & ``Tap all risk factors for sepsis present (some you have already asked about)
+ these RFs will guide us on antibiotics" -> ``PROM more than 18 hrs" \\ \addlinespace
+ 
+ Foul smelling amniotic fluid & ``Tap all risk factors for sepsis present (some you
+ have already asked about) these RFs will guide us on antibiotics" -> ``Offensive
+ Liquor" \\ \addlinespace 
+ 
+ Gestation <32 weeks & ``Gestation of the baby to the nearest week?" -> ``Gestational
+ age at birth (weeks)" -> \textit{weeks (integer)} \\ \addlinespace
+ 
+ Birth weight <1500g & ``Look for birth weight in the obstetric record; Infants
+ $>$24hrs old need a weight on the day of admission" -> ``Birth Weight (g)" /
+ ``Admission Weight (g) (if different)" -> \textit{grams (integer)} \\ \addlinespace
+ \midrule
+ 
+ \textbf{Signs and symptoms} &  \\ \addlinespace
+ 
+ Neonatal temperature >37.5°C & ``Temperature (degs C)" ->
+ \textit{degrees Celsius (decimal, 1DP)} \\ \addlinespace
+ 
+ Boil or abscess & ``Examine the baby’s skin" -> ``Big Boil / Abscess" \\ \addlinespace
+ 
+ Grunting, severe respiratory distress or moderate to severely increased work of
+ breathing & ``Look at the baby. Can you see any of the following now?" ->
+ ``Grunting or severe chest indrawings" \\ \addlinespace
+ 
+  & ``Tap all that are present (more than one if necessary)" -> ``Nasal flaring" /
+  ``Chest in-drawings" / ``Grunting" \\ \addlinespace
+  
+  & ``How severe is the work of breathing" -> ``Mild" / ``Moderate" / ``Severe" \\ \addlinespace
+ 
+ Lethargy & ``How is the baby’s activity?" -> ``Lethargic, quiet, decreased activity"
+ \\ \addlinespace
+ 
+ Umbilical redness or umbilicus draining pus & ``Describe the umbilicus" ->
+ ``Red skin all around umbilicus" \\ \addlinespace
+ 
+ Deep jaundice & ``What colour is the baby?" -> ``Yellow" \\ \addlinespace
+ 
+ Tachypnoea >60 breaths per minute & ``Tap the timer above to count the number of
+ breaths in 30 seconds" -> \textit{breaths per minute (integer)} \\ \addlinespace
+ 
+ Convulsions, twitching or abnormal movements & ``Look at the baby. Can you see any
+ of the following now?" -> ``Convulsions or twitchings" \\ \addlinespace
+ 
+  & ``How is the baby’s activity?" -> ``Seizures, convulsions, or twitchings" \\ \addlinespace
+  
+ Many or severe skin pustules & ``Examine the baby’s skin" -> ``Pustules all over"
+ \\ \addlinespace
+ 
+ Bilious vomiting with severe abdominal distention & ``Has the baby been vomiting"
+ -> ``Vomiting bright green" \\ \addlinespace
+ 
+  & ``Softly palpate the abdomen in all 4 quadrants" -> ``Distended" \\ \addlinespace
+  
+ Bulging fontanelle & ``Feel the fontanelle" -> ``Bulging" \\ \addlinespace
+ 
+ Not moving when stimulated & ``How is the baby’s activity?" -> ``Coma (unresponsive)"
+ \\ \addlinespace
+ 
+ Swollen red eyelids with pus & (No corresponding data collected by Neotree) \\ \addlinespace
+ 
+ Central cyanosis & ``Look at the baby. Can you see any of the following now?" ->
+ ``Central cyanosis" \\ \addlinespace
+ 
+  & ``What colour is the baby?" -> ``Blue" \\ \addlinespace
+  
+ Pallor & ``What colour is the baby?" -> ``White" \\ \addlinespace
+ 
+ Tachycardia >160 beats per minute & ``Heart rate (beats/min)" ->
+ \textit{beats per minute (integer)} \\ \addlinespace
+ 
+ \bottomrule
+\end{longtable}
+\end{center}
+
+*DP = decimal place; PROM = prolonged rupture of membranes; RF = risk factor;
+ROM = rupture of membranes*

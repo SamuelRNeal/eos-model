@@ -1,0 +1,1046 @@
+---
+title: "8-Modelling"
+output:
+  pdf_document:
+    number_sections: yes
+    df_print: tibble
+    latex_engine: xelatex
+---
+
+```{r setup8, include=FALSE}
+library("knitr")
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, out.width="60%")
+# Set root directory from Rmd dir to project dir
+opts_knit$set(root.dir = "..") 
+```
+
+```{r libraries8, include=FALSE}
+source("Scripts/0-setup.R")
+```
+
+```{r data8, include=FALSE}
+dat <- readRDS("Data/prepare2_dat.rds")
+imp <- readRDS("Data/imputed_dfs.rds")
+```
+
+Description of model development.
+
+## Univariable association of candidate predictors with EOS
+
+Below is a univariable logistic regression showing the univariable association
+between each candidate predictor and the outcome of EOS. The results are pooled
+across all imputed datasets.
+
+*N.B. To make interpretation easier, birth weight has been converted to kilograms,
+respiratory rate and heart rate have been divided by 5 (i.e. 5 breaths per minute),
+and "activity" has been collapsed into "alert", "lethargic", or "other".*
+
+```{r univariable}
+# Final set of candidate predictors
+predictors <- c("pi_gest", "et_bw", "oh_matfever", "oh_offliquor", "co_prom",
+                "et_grunt", "et_rr", "et_hr", "et_temp", "oe_activity", "oe_nasalflare",
+                "oe_retractions", "oe_grunt", "oe_wob")
+
+# Make interpretation easier
+imp <- complete(imp, action = "long", include = T) %>%
+  mutate(
+    et_bw = et_bw/1000,
+    et_rr = et_rr/5,
+    et_hr = et_hr/5,
+    oe_activity = fct_collapse(
+      oe_activity,
+      alert = "alert",
+      lethargic = "lethargic",
+      other = c("irritable", "seizures", "coma")
+      )
+    ) %>%
+  as.mids()
+
+# Univariable regression for each predictor
+univar_regression <-
+  set_names(predictors) %>%
+  map(
+    function(predictor) {
+      fit <- with(imp, glm(as.formula(paste("sepsis ~", predictor)), family = "binomial"))
+      est <- pool(fit)
+      summary(est, conf.int = TRUE, exponentiate = FALSE)
+    }
+  )
+
+univar_table <- map_df(
+  univar_regression,
+  ~ tibble(
+    predictor = .$term,
+    beta = .x$estimate,
+    SE = .x$std.error,
+    OR = exp(.x$estimate),
+    LCL = exp(.x$`2.5 %`),
+    UCL = exp(.x$`97.5 %`),
+    p = .x$p.value
+    )
+  ) %>%
+  filter(predictor != "(Intercept)") %>%
+  mutate(across(where(is.numeric), round, 3))
+
+univar_table
+
+```
+
+## Model selection
+
+### Randomly select a single imputed dataset
+
+To facilitate comparison between models, we randomly select a single imputed
+dataset (from the `r imp$m` imputations) and use this imputation throughout
+model selection.
+
+```{r random_imp, echo=TRUE}
+set.seed(37)
+rand <- floor(runif(1, min = 1, max = 30))
+rand
+
+si <- as_tibble(complete(imp, rand))
+```
+
+### Assess linearity assumption
+
+#### Histograms
+
+We first assessed the linearity assumption – that the outcome of sepsis is
+modelled by a linear combination of predictors – graphically, by plotting
+histograms of the proportion of included neonates with sepsis per decile of
+each continuous predictor. 
+
+```{r nl_histograms}
+predictors_num <- c("pi_gest", "et_bw", "et_rr", "et_hr", "et_temp")
+
+# Create data frame of deciles for each continuous predictor
+deciles <- si %>%
+  select(all_of(predictors_num), sepsis) %>%
+  mutate(et_rr = et_rr*5, et_hr = et_hr*5) %>% # convert back to original scale
+  mutate(across(all_of(predictors_num), quantcut, q = 10, na.rm = T))
+
+# View(deciles %>% group_by(et_hr) %>% count(sepsis))
+
+# Plot count of outcome for each decile
+deciles_plots <-
+  set_names(predictors_num) %>%
+  map(
+    ~ ggplot(
+      deciles,
+      aes(x = .data[[.x]], fill = sepsis)) +
+      geom_bar(position = "fill") +
+      scale_y_continuous(expand = c(0,0)) +
+      scale_fill_manual(values = c("grey", hcl(0, 100, 40))) +
+      labs(x = paste0("deciles of ", .x)) +
+      theme_classic2() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+      NULL
+    )
+
+# Combine into one figure
+legend <- get_legend(deciles_plots[[1]])
+deciles_plots <- map(
+  deciles_plots,
+  ~ .x + theme(legend.position = "none")
+  )
+deciles_grid1 <- plot_grid(
+  plotlist = deciles_plots[1:3],
+  ncol = 3,
+  labels = c("A", "B", "C")
+  )
+deciles_grid2 <- plot_grid(
+  deciles_plots[[4]], deciles_plots[[5]], legend,
+  ncol = 3,
+  labels = c("D", "E", NULL)
+)
+deciles_fig <- plot_grid(
+  deciles_grid1, deciles_grid2,
+  nrow = 2,
+  rel_heights = c(1, 1)
+)
+deciles_fig
+
+ggsave("Figures/deciles_fig.png", deciles_fig, width = 10, height = 5, dpi = 300)
+rm(legend, deciles_grid1, deciles_grid2)
+```
+
+If the relationship between the predictor and the probability of EOS were linear,
+we would expect the proportion of cases of sepsis to increase or decrease at a
+constant rate across deciles. Therefore, the above figure suggests some 
+non-linearity for all continuous candidate predictors but most pronounced for
+temperature.
+
+#### Splines
+
+We explored non-linear effects of continuous predictors by fitting univariable
+logistic regression models to predict the outcome of sepsis and modelling each
+continuous predictor as a natural cubic spline (NCS) function with varying
+degrees of freedom from 1 (linear) to 10.
+
+We plotted the AIC and BIC of these models for each predictor to visually
+determine the optimal degrees of freedom for the NCS function.
+
+```{r nl_splines}
+# Create data frame of AIC & BIC for each continuous predictor, df = 1:10
+df <- 1:10
+ns_form <- map2(
+  .x = rep(predictors_num, each = 10),
+  .y = rep(df, 5),
+  ~ as.formula(paste0("sepsis ~ ns(", .x, ", df = ", .y, ")"))
+)
+
+fit_ns <- map(
+  ns_form,
+  ~ glm(., data = si, family = "binomial")
+  )
+
+fit_ns_df <- map_df(
+  fit_ns,
+  ~ tibble(
+    AIC = AIC(.),
+    BIC = BIC(.)
+    )
+  ) %>%
+  mutate(
+    predictor = rep(predictors_num, each = 10),
+    df = rep(df, 5)
+  ) %>%
+  select(predictor, df, AIC, BIC) # reorder columns
+
+# Plot
+fit_ns_plot <- fit_ns_df %>%
+  pivot_longer(cols = c("AIC", "BIC")) %>%
+  ggplot(aes(x = df, y = value, colour = name)) +
+  geom_line() +
+  scale_x_continuous(breaks = seq(0,10,1)) +
+  scale_colour_manual(values = c("red", "blue")) +
+  facet_wrap(~ predictor, scales = "free_y") +
+  labs(colour = NULL) +
+  theme_classic2() +
+  theme(legend.position = "top") +
+  NULL
+
+fit_ns_plot
+
+ggsave("Figures/ns_IC_fig.png", fit_ns_plot, width = 10, height = 5, dpi = 300)
+
+```
+
+The above figure shows that the AIC and BIC increased monotonically or remained
+approximately constant across all degrees of freedom for heart rate, respiratory
+rate and gestational age. This suggests that using the untransformed predictor
+(i.e. assuming linearity) resulted in a better model than defining these
+predictors with natural cubic splines.
+
+However, for birth weight, minimum values for AIC and BIC were determined by
+a natural cubic spline with 2 degrees of freedom (top left panel, above).
+Similarly, for temperature, the BIC was minimal for natural cubic splines with
+2 or 5 degrees of freedom before increasing monotonically. The AIC had minima
+at 5 or 7 degrees of freedom (bottom left panel, above).
+
+The above figure suggests that transforming birth weight using a natural cubic
+spline with 2 degrees of freedom and transforming temperature using a natural
+cubic spline with 5 degrees of freedom produced the optimal univariable models
+of the natural cubic spline transformations explored.
+
+#### Polynomials
+
+We further explored non-linear effects by modelling each continuous predictor
+with polynomial transformations instead of natural cubic spline functions.
+
+Again, we plotted the AIC and BIC of these models for each predictor to visually
+determine the optimal degree of polynomial.
+
+
+```{r nl_polynomials, warning=FALSE}
+# Create data frame of AIC & BIC for each continuous predictor, degree = 1:5
+degree <- 1:5
+poly_form <- map2(
+  .x = rep(predictors_num, each = 5),
+  .y = rep(degree, 5),
+  ~ as.formula(paste0("sepsis ~ poly(", .x, ", ", .y, ")"))
+)
+
+fit_poly <- map(
+  poly_form,
+  ~ glm(., data = si, family = "binomial")
+  )
+
+fit_poly_df <- map_df(
+  fit_poly,
+  ~ tibble(
+    AIC = AIC(.),
+    BIC = BIC(.)
+    )
+  ) %>%
+  mutate(
+    predictor = rep(predictors_num, each = 5),
+    degree = rep(degree, 5)
+  ) %>%
+  select(predictor, degree, AIC, BIC) # reorder columns
+
+# Plot
+fit_poly_plot <- fit_poly_df %>%
+  pivot_longer(cols = c("AIC", "BIC")) %>%
+  ggplot(aes(x = degree, y = value, colour = name)) +
+  geom_line() +
+  scale_x_continuous(breaks = seq(0,5,1)) +
+  scale_colour_manual(values = c("red", "blue")) +
+  facet_wrap(~ predictor, scales = "free_y") +
+  labs(colour = NULL) +
+  theme_classic2() +
+  theme(legend.position = "top") +
+  NULL
+fit_poly_plot
+
+ggsave("Figures/poly_IC_fig.png", fit_poly_plot, width = 10, height = 5, dpi = 300)
+
+```
+
+The above figure shows that the AIC and BIC increased monotonically or remained
+approximately constant across all degrees of polynomials for heart rate,
+respiratory rate and gestational age. This suggests that using the untransformed
+predictor (i.e. assuming linearity) resulted in a better model than transforming
+these predictors with polynomial functions.
+
+However, for birth weight, minimum values for AIC and BIC were determined by
+a second-degree polynomial (top left panel, above). Similarly, for temperature,
+the BIC was minimal for a second-degree polynomial and the AIC was minimal for
+a second-degree or fifth-degree polynomial (bottom left panel, above).
+
+The above figure suggests that transforming birth weight and temperature using
+a second-degree polynomial produced the optimal univariable models of the
+polynomial transformations explored.
+
+#### Univariable models with non-linear transformations - birth weight
+
+Based on the above results, we fit a univariable model to predict early-onset
+sepsis with birth weight modelled as a natural cubic spline with 2 degrees of
+freedom.
+
+```{r nl_bw}
+# NCS with df = 2
+bw_ns2 <- glm(sepsis ~ ns(et_bw, df = 2), data = si, family = "binomial")
+tbl_regression(bw_ns2, exponentiate = FALSE) %>%
+  modify_column_unhide(std.error)
+
+# Knot placed at...
+attr(ns(si$et_bw, df = 2), "knots")
+```
+
+While both components of the spline were significant, their coefficients were
+unstable with large SEs.
+
+Thus, we subsequently modelled birth weight as a second-degree polynomial.
+
+```{r nl_bw2}
+# Second-degree polynomial
+bw_poly2 <- glm(sepsis ~ poly(et_bw, 2), data = si, family = "binomial")
+tbl_regression(bw_poly2, exponentiate = FALSE) %>%
+  modify_column_unhide(std.error)
+```
+
+This model suffered similar numerical issues. Adding random noise did not improve
+estimations in either the natural cubic spline or polynomial models:
+
+```{r nl_bw3}
+# Add random noise
+si$et_bw_noise <- si$et_bw + rnorm(nrow(si), 0, sd = .05)
+bw_ns2_noise <- glm(sepsis ~ ns(et_bw_noise, df = 2), data = si, family = "binomial")
+bw_poly2_noise <- glm(sepsis ~ poly(et_bw_noise, 2), data = si, family = "binomial")
+
+tbl_regression(bw_ns2_noise, exponentiate = FALSE) %>%
+  modify_column_unhide(std.error)
+
+tbl_regression(bw_poly2_noise, exponentiate = FALSE) %>%
+  modify_column_unhide(std.error)
+
+```
+
+Therefore, birth weight was assumed to be linear in subsequent models.
+
+#### Univariable models with non-linear transformations - temperature
+
+Based on the above results, we fit a univariable model to predict early-onset
+sepsis with temperature modelled as a natural cubic spline with 5 degrees of
+freedom and with 2 degrees of freedom.
+
+```{r nl_temp}
+# NCS with df = 5
+temp_ns5 <- glm(sepsis ~ ns(et_temp, df = 5), data = si, family = "binomial")
+tbl_regression(temp_ns5, exponentiate = FALSE) %>%
+  modify_column_unhide(std.error)
+
+# Knots placed at...
+attr(ns(si$et_temp, df = 5), "knots")
+
+# NCS with df = 2
+temp_ns2 <- glm(sepsis ~ ns(et_temp, df = 2), data = si, family = "binomial")
+tbl_regression(temp_ns2, exponentiate = FALSE) %>%
+  modify_column_unhide(std.error)
+
+# Knots placed at...
+attr(ns(si$et_temp, df = 2), "knots")
+
+```
+
+Similar numerical issues were encountered for these models as were encountered
+when fitting non-linear functions of birth weight.
+
+Again, we subsequently modelled temperature as a second-degree polynomial and
+tried adding random noise, neither of which produced satisfactory models.
+
+```{r nl_temp2}
+# Second-degree polynomial
+temp_poly2 <- glm(sepsis ~ poly(et_temp, 2), data = si, family = "binomial")
+tbl_regression(temp_poly2, exponentiate = FALSE) %>%
+  modify_column_unhide(std.error)
+
+# Add random noise
+si$et_temp_noise <- si$et_temp + rnorm(nrow(si), 0, sd = .05)
+temp_ns2_noise <- glm(sepsis ~ ns(et_temp_noise, df = 2), data = si, family = "binomial")
+temp_poly2_noise <- glm(sepsis ~ poly(et_temp_noise, 2), data = si, family = "binomial")
+
+tbl_regression(temp_ns2_noise, exponentiate = FALSE) %>%
+  modify_column_unhide(std.error)
+
+tbl_regression(temp_poly2_noise, exponentiate = FALSE) %>%
+  modify_column_unhide(std.error)
+```
+
+Therefore, temperature was also assumed to be linear in subsequent models.
+
+### Selecting main effects
+
+#### Fit full main effects model (model M1)
+
+We next fit a full main effects model to predict sepsis, including all 14
+candidate predictors (those remaining after consideration of skewed predictor
+distributions). The AIC and BIC of this full model were the benchmark to which
+subsequent models were compared.
+
+```{r main_effects}
+main_form <- sepsis ~ et_temp + et_rr + et_hr + et_bw + pi_gest + oh_matfever +
+  oh_offliquor + co_prom + et_grunt + oe_activity + oe_nasalflare + oe_retractions +
+  oe_grunt + oe_wob
+
+M1 <- glm(main_form, data = si, family = "binomial")
+M1$formula
+summary(M1)
+cbind("AIC" = AIC(M1), "BIC" = BIC(M1))
+```
+
+This model assumed linearity of all continuous candidate predictors and
+additivity at the predictor scale. The regression coefficients and SEs of each
+predictor in this model (estimated in the single imputed dataset) are as follows:
+
+```{r main_effects2}
+tbl_regression(
+  M1,
+  exponentiate = TRUE,
+  show_single_row = c(
+    "oh_matfever",
+    "oh_offliquor",
+    "co_prom",
+    "et_grunt",
+    "oe_nasalflare",
+    "oe_retractions",
+    "oe_grunt"
+    ),
+  add_estimate_to_reference_rows = TRUE
+)
+```
+
+The highest VIF values were for the 'moderate' and 'severe' categories of work
+of breathing and retractions. All other VIF values were < 5. Pearson's chi-squared
+test showed that these two predictors were highly correlated with each other:
+
+```{r main_effects3}
+cbind("VIF" = vif(M1)) %>%
+  as_tibble(rownames = "predictor") %>%
+  arrange(-VIF)
+
+# Chi-squared test
+table(si$oe_retractions, si$oe_wob)
+chisq.test(table(si$oe_retractions, si$oe_wob))
+```
+
+#### Models M2 & M2a
+
+Next, we fit model M2 as the above full model (model M1), but without work of
+breathing (the predictor with the highest VIF in model M1). This model had a
+higher AIC compared to model M1, but a lower BIC. Removing work of breathing
+from the model also reduced collinearity between predictors.
+
+```{r M2}
+M2 <- update(M1, .~. -oe_wob)
+M2$formula
+summary(M2)
+cbind("AIC" = AIC(M2), "BIC" = BIC(M2))
+
+cbind("VIF" = vif(M2)) %>%
+  as_tibble(rownames = "predictor") %>%
+  arrange(-VIF)
+```
+
+For comparison, model M2a instead dropped retractions from model M1. This model
+had a slightly improved AIC compared to model M2, but a higher BIC.
+
+```{r M2a}
+M2a <- update(M1, .~. -oe_retractions)
+M2a$formula
+summary(M2a)
+cbind("AIC" = AIC(M2a), "BIC" = BIC(M2a))
+```
+
+#### Models M3 & M4
+
+Note that the sign of the regression coefficient for grunting at emergency triage
+(`et_grunt`) and nasal flaring in model M2 (above) was inconsistent with
+established subject knowledge of neonatal sepsis. We would expect the presence
+of these clinical features would increase the probability of sepsis, yet they
+had negative regression coefficients.
+
+Therefore, model M3 was fitted as model M2, but without grunting at emergency
+triage or nasal flaring. This model had a slightly lower AIC and BIC compared to
+model M2.
+
+```{r M3}
+M3 <- update(M2, .~. -et_grunt -oe_nasalflare)
+M3$formula
+summary(M3)
+cbind("AIC" = AIC(M3), "BIC" = BIC(M3))
+```
+
+Looking at the above model, the regression coefficient for heart rate was close
+to zero and it was not found to be a significant predictor in the model.
+Therefore, heart rate was dropped from model M3 to fit model M4. This model had
+a lower AIC and BIC compared to model M3. Also, this model had minimal
+collinearity between predictors.
+
+```{r M4}
+M4 <- update(M3, .~. -et_hr)
+M4$formula
+summary(M4)
+cbind("AIC" = AIC(M4), "BIC" = BIC(M4))
+
+cbind("VIF" = vif(M4)) %>%
+  as_tibble(rownames = "predictor") %>%
+  arrange(-VIF)
+```
+
+Note that two non-significant predictors were retained in the regression model
+(premature rupture of membranes and grunting on examination) as the sign of
+their regression coefficient was consistent with established knowledge and the
+corresponding *p*-values were reasonably small. Also, birth weight and
+gestational age were retained in the model despite being non-significant to test
+for interactions between these two predictors, as described ahead.
+
+### Assess additivity assumption
+
+We then assessed the additivity assumption – that the effects of predictors can
+be added at the linear predictor scale (and thus multiplied at the odds scale)
+- by assessing for a biologically plausible interaction between birth weight and
+gestational age.
+
+#### Interaction plots
+
+There was a significant interaction between birth weight and gestational age in
+a logistic regression model of these two predictors predicting EOS:
+
+```{r interaction}
+# Additive model
+# bwgest0 <- glm(sepsis ~ et_bw + pi_gest, data = si, family = "binomial")
+# bwgest0$formula
+# summary(bwgest0)
+
+# Allowing for interaction
+bwgest1 <- glm(sepsis ~ et_bw * pi_gest, data = si, family = "binomial")
+bwgest1$formula
+summary(bwgest1)
+```
+
+A plot of this interaction is shown below. Panel A shows the logit of the
+probability of sepsis across all values of birth weight at six selected values
+of gestational age. Panel B shows the same interaction but displayed across all
+values of gestational age at four selected values of birth weight.
+
+```{r interaction2}
+# Birth weight modified by gestational age
+interact_plot1 <- interact_plot(
+  bwgest1,
+  pred = et_bw,
+  modx = pi_gest,
+  modx.values = seq(32,42,2),
+  outcome.scale = "link",
+  data = si,
+  interval = TRUE,
+  y.label = "Logit sepsis"
+  )
+
+# Gestational age modified by birth weight
+interact_plot2 <- interact_plot(
+  bwgest1,
+  pred = pi_gest,
+  modx = et_bw,
+  modx.values = seq(1.5,4.5,1),
+  outcome.scale = "link",
+  data = si,
+  interval = TRUE,
+  y.label = "Logit sepsis"
+  )
+
+interact_plot_grid <- plot_grid(interact_plot1, interact_plot2, labels = "AUTO")
+interact_plot_grid
+
+ggsave("Figures/interactions_fig.png", interact_plot_grid, width = 10, height = 3.5, dpi = 300)
+```
+
+At lower birth weights, those with a higher gestational age appeared to have a
+greater probability of sepsis compared to those with lower gestational ages
+(panel A, above). However, at approximately 3200 grams, this relationship
+reversed, after which the probability of sepsis appeared higher for those with
+lower gestational ages. The above figure suggests that the probability of sepsis
+decreased with increasing birth weight for gestational ages > 38 weeks but
+increased with increasing birth weight for gestational ages < 38 weeks.
+
+This relationship can also be interpreted such that, for lower gestational ages,
+those with higher birth weights had a greater probability of sepsis compared to
+those with lower birth weights (panel B, above). For higher gestational ages
+(above around 38 weeks), those with a higher birth weight had the lowest
+probability of sepsis.
+
+#### Models M5 & M5a
+
+The interaction between birth weight and gestational age was included in the
+selected multivariable model M4 to produce model M5.
+
+The main effects and the interaction term were significant for birth weight and
+gestational age in this model. However, the coefficients and standard errors
+were extreme for these terms, with large VIF values.
+
+```{r M5}
+M5 <- update(M4, .~. -et_bw -pi_gest +et_bw*pi_gest)
+M5$formula
+summary(M5)
+cbind("AIC" = AIC(M5), "BIC" = BIC(M5))
+
+cbind("VIF" = vif(M5)) %>%
+  as_tibble(rownames = "predictor") %>%
+  arrange(-VIF)
+```
+
+Refitting this model but with birth weight and gestational age centred by
+subtracting their respective sample means from each observation greatly improved
+the estimates (model M5a). However, the main effects of these terms were no
+longer significant despite a significant interaction. This is consistent with
+the crossover interaction effect seen in the interaction plot shown previously.
+
+```{r M5a}
+# Centre birth weight and gestational age
+si$et_bw_centred <- si$et_bw - mean(si$et_bw)
+si$pi_gest_centred <- si$pi_gest - mean(si$pi_gest)
+
+# Refit model
+M5a <- update(M5, .~. -et_bw*pi_gest +et_bw_centred*pi_gest_centred)
+M5a$formula
+summary(M5a)
+cbind("AIC" = AIC(M5a), "BIC" = BIC(M5a))
+
+cbind("VIF" = vif(M5a)) %>%
+  as_tibble(rownames = "predictor") %>%
+  arrange(-VIF)
+```
+
+Given that allowing for an interaction between birth weight and gestational age
+(model M5a) showed only minor improvements in the AIC and BIC compared to the
+model assuming additivity (model M4), we selected model M4 as it was the simpler
+model.
+
+This decision was reinforced since the distributions of birth weight and
+gestational age in our cohort suggested that higher birth weights and gestational
+ages had a higher probability of sepsis than lower birth weights and gestational
+ages. This contradicted what is expected from established subject knowledge.
+
+#### Models M6 and M7
+
+Since the interaction between birth weight and gestational age was no longer
+included in the model, model M4 was refitted but without gestational age (model
+M6) as the sign of its regression coefficient contradicted established knowledge
+and it was not significant in model M4. This improved both the AIC and BIC
+compared to model M4.
+
+```{r M6}
+M6 <- update(M4, .~. -pi_gest)
+M6$formula
+summary(M6)
+cbind("AIC" = AIC(M6), "BIC" = BIC(M6))
+```
+
+Finally, in model M7, we refitted model M6 without birth weight as the *p*-value
+for this term in model M6 was large.
+
+```{r M7}
+M7 <- update(M6, .~. -et_bw)
+M7$formula
+summary(M7)
+cbind("AIC" = AIC(M7), "BIC" = BIC(M7))
+
+cbind("VIF" = vif(M7)) %>%
+  as_tibble(rownames = "predictor") %>%
+  arrange(-VIF)
+```
+
+### Selected model
+
+Model M7 was favoured by both the AIC and BIC and was thus selected as the
+optimal model. This model included 8 of the 14 candidate predictors. The
+regression coefficients and SEs of each predictor in this model (estimated in
+the single imputed dataset) are as follows:
+
+```{r M7_summary}
+tbl_regression(
+  M7,
+  exponentiate = TRUE,
+  show_single_row = c(
+    "oh_matfever",
+    "oh_offliquor",
+    "co_prom",
+    "oe_retractions",
+    "oe_grunt"
+    ),
+  add_estimate_to_reference_rows = TRUE
+)
+```
+
+## Model performance
+
+### In the single imputed dataset
+
+The ROC curve for the optimal model in the single imputed dataset (imputation
+number `r rand`) is shown below.
+
+```{r performance_si}
+# Predict on the single imputation
+pred_si <- predict(M7, newdata = si, type = "response")
+
+roc_si <- pROC::roc(
+  sepsis ~ pred_si,
+  data = si, 
+  plot = TRUE,
+  print.auc = TRUE,
+  ci = TRUE
+  )
+```
+
+We calculated Yates' discrimination slope as the absolute difference in mean
+predicted probabilities between the two observed outcome groups. We obtained 95%
+confidence intervals using bootstrap (calculated using the normal approximation
+and 10,000 resamples).
+
+```{r yates, cache=TRUE}
+# Yates' discrimination slope with bootstrap CIs
+# yatesBootstrap = custom function in functions.R
+# 'model' = arg for yatesBootstrap
+set.seed(42)
+yates <- boot(si, yatesBootstrap, R = 10000, model = M7)
+yates
+# hist(yates$t)
+boot.ci(yates, type = c("norm", "perc"))
+```
+
+A boxplot and density plot of predicted probabilities of EOS by observed outcome
+are shown below. On average, the predicted probability was higher for observed
+cases of sepsis than observed cases without sepsis. Nevertheless, there was
+substantial overlap in predicted probabilities, with cases of sepsis with a low
+predicted probability (below the median for observed cases without sepsis) and
+cases without sepsis with a high predicted probability (above the median for
+observed cases with sepsis).
+
+```{r performance_si2}
+# Boxplot
+boxplot_df <- tibble(
+  pred = plogis(M7$linear.predictors),
+  sepsis = si$sepsis
+  )
+
+M7_boxplot <- boxplot_df %>%
+  ggplot(aes(x = sepsis, y = pred, fill = sepsis)) +
+  geom_boxplot(colour = "black") +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0,1,.2)) +
+  scale_fill_manual(values = c("grey", hcl(0, 100, 40)),
+                    guide = guide_legend(reverse = T)) +
+  labs(y = "Predicted probability of sepsis", x = "Observed case of sepsis",
+       fill = "Observed sepsis: ") +
+  annotate(geom = "label", x = 0.6, y = 0.75,
+           label = paste0("Discrimination slope = ", round(yates[[1]], 2))) +
+  coord_flip() +
+  theme_classic2() +
+  theme(legend.position = "top") +
+  NULL
+
+# Double density plot
+M7_density <- boxplot_df %>%
+  ggplot(aes(x = pred, color = sepsis)) + 
+  geom_density(size = 1) +
+  scale_x_continuous(limits = c(0,1), seq(0,1,.2),
+                     name = "Predicted probability of sepsis") +
+  scale_colour_manual(values = c("grey", hcl(0, 100, 40)),
+                      guide = guide_legend(reverse = T)) + 
+  labs(colour = "Observed sepsis: ") +
+  theme_classic2() +
+  theme(legend.position = "top") +
+  NULL
+
+discrimination_fig <- plot_grid(M7_boxplot, M7_density, nrow = 1, labels = "AUTO")
+
+ggsave("Figures/figure3a_boxplot.png", M7_boxplot, width = 5, height = 5, dpi = 300)
+ggsave("Figures/figure3b_density.png", M7_density, width = 5, height = 5, dpi = 300)
+ggsave("Figures/figure3_discrimination.png", discrimination_fig, width = 10, height = 4.5, dpi = 300)
+
+discrimination_fig
+
+# # Lorenz curve
+# pred_obj <- ROCR::prediction(pred_si, si$sepsis)
+# perf_obj <- ROCR::performance(pred_obj,"fnr","rnp")
+# plot(perf_obj, xlab = "Fraction not diagnosed as sepsis", ylab = "Diagnosis missed")
+# abline(a=0,b=1)
+# 
+# # Calibration plot
+# par(pty='s')
+# val.prob.ci.2(pred_si, if_else(si$sepsis == "yes", 1, 0))
+# par(pty='m')
+
+```
+
+Performance of the optimal model in the selected imputed dataset at various
+thresholds of predicted probability are shown below. We obtained 95%
+confidence intervals for likelihood ratios using bootstrap (calculated using the
+empirical method and 10,000 resamples).
+
+```{r performance_si3, cache=TRUE}
+# Get thresholds and corresponding sensitivities from ROC curve
+thres <- coords(
+  roc_si,
+  x = "all",
+  ret = c("threshold", "sens"),
+  transpose = FALSE,
+  as.matrix = FALSE
+  )
+# Get 'optimal' threshold (Youden's index)
+thres_best <- coords(
+  roc_si, x = "best",
+  ret = c("threshold"),
+  best.method = "youden",
+  transpose = FALSE,
+  as.matrix = FALSE
+  )
+# Define selected sensitivites
+sens_list <- c(0.8, 0.85, 0.9, 0.95)
+
+# Determine threshold corresponding to each sensitivity
+thres <- thres %>%
+  mutate(threshold = round(threshold, 5),
+         sensitivity = round(sensitivity, 2)
+         )
+selected_thres <- tibble(
+  sens = sens_list,
+  thres = rep(NA_real_, length(sens_list))
+)
+  for (i in 1:length(sens_list)) {
+      x <- thres[which.min(abs(thres$sensitivity - sens_list[i])), 1]
+      x <- max(x) # take largest value if multiple
+      x <- sample(x, 1) # take only one if multiple identical maxima
+      selected_thres[i, 2] <- x
+  }
+  selected_thres <- c(round(thres_best[[1]], 5), selected_thres$thres)
+
+# Get xtabs
+xtabs_list <- list(NA)
+for (i in 1:length(selected_thres)) {
+  obs <- factor(si$sepsis, levels = c("yes", "no"))
+  pred <- factor(if_else(pred_si > selected_thres[i], "yes", "no"), levels = c("yes", "no"))
+  xtabs_list[[i]] <- table(pred, obs)
+}
+names(xtabs_list) <- c("best", sens_list)
+xtabs_list
+
+# Get performance from xtabs at each threshold
+si_performance <- tibble(
+  sens = NA_real_,
+  sens.lcl = NA_real_,
+  sens.ucl = NA_real_,
+  spec = NA_real_,
+  spec.lcl = NA_real_,
+  spec.ucl = NA_real_,
+  PPV = NA_real_,
+  PPV.lcl = NA_real_,
+  PPV.ucl = NA_real_,
+  NPV = NA_real_,
+  NPV.lcl = NA_real_,
+  NPV.ucl = NA_real_,
+  PLR = NA_real_,
+  PLR.lcl = NA_real_,
+  PLR.ucl = NA_real_,
+  NLR = NA_real_,
+  NLR.lcl = NA_real_,
+  NLR.ucl = NA_real_
+)
+for (i in 1:length(xtabs_list)) {
+  TP <- xtabs_list[[i]][1,1]
+  FP <- xtabs_list[[i]][1,2] 
+  FN <- xtabs_list[[i]][2,1]
+  TN <- xtabs_list[[i]][2,2]
+  # Sens
+  si_performance[i,"sens"] <- TP / (TP + FN)
+  si_performance[i,"sens.lcl"] <- binom.test(TP,(TP + FN), p = 0.5)$conf.int[1]
+  si_performance[i,"sens.ucl"] <- binom.test(TP,(TP + FN), p = 0.5)$conf.int[2]
+  # Spec
+  si_performance[i,"spec"] <- TN / (TN + FP)
+  si_performance[i,"spec.lcl"] <- binom.test(TN,(TN + FP), p = 0.5)$conf.int[1]
+  si_performance[i,"spec.ucl"] <- binom.test(TN,(TN + FP), p = 0.5)$conf.int[2]
+  #PPV
+  si_performance[i,"PPV"] <- TP / (TP + FP)
+  si_performance[i,"PPV.lcl"] <- binom.test(TP,(TP + FP), p = 0.5)$conf.int[1]
+  si_performance[i,"PPV.ucl"] <- binom.test(TP,(TP + FP), p = 0.5)$conf.int[2]
+  #NPV
+  si_performance[i,"NPV"] <- TN / (TN + FN)
+  si_performance[i,"NPV.lcl"] <- binom.test(TN,(TN + FN), p = 0.5)$conf.int[1]
+  si_performance[i,"NPV.ucl"] <- binom.test(TN,(TN + FN), p = 0.5)$conf.int[2]
+  #PLR (sens / 1 - spec)
+  si_performance[i,"PLR"] <- si_performance[i,"sens"] / (1 - si_performance[i,"spec"])
+  #NLR (1 - sens / spec)
+  si_performance[i,"NLR"] <- (1 - si_performance[i,"sens"]) / si_performance[i,"spec"]
+}
+si_performance <- si_performance %>%
+  mutate(thres = selected_thres) %>%
+  select(thres, everything()) %>%
+  mutate(across(everything(), round, 3)) %>%
+  mutate(across(-c(thres, PLR, NLR), ~.*100))
+
+# Add bootstrap confidence intervals for likelihood ratios
+set.seed(42)
+bootstrap_PLR <- boot(si, likelihoodBootstrap,
+  R = 10000,
+  model = M7, return = "PLR" # args of likelihoodBootstrap
+)
+bootstrap_NLR <- boot(si, likelihoodBootstrap,
+  R = 10000,
+  model = M7, return = "NLR" # args of likelihoodBootstrap
+)
+
+# 1:length(bootstrap_PLR$t0) %>% map(~ hist(bootstrap_PLR$t[, .x]))
+# 1:length(bootstrap_NLR$t0) %>% map(~ hist(bootstrap_NLR$t[, .x]))
+
+PLR_CI <- 1:length(bootstrap_PLR$t0) %>%
+  map(~ boot.ci(bootstrap_PLR, type = c("norm", "basic", "perc"), index = .x))
+NLR_CI <- 1:length(bootstrap_NLR$t0) %>%
+  map(~ boot.ci(bootstrap_NLR, type = c("norm", "basic", "perc"), index = .x))
+
+si_performance$PLR.lcl <- map_dbl(1:length(PLR_CI), ~ PLR_CI[[.x]]$basic[4])
+si_performance$PLR.ucl <- map_dbl(1:length(PLR_CI), ~ PLR_CI[[.x]]$basic[5])
+si_performance$NLR.lcl <- map_dbl(1:length(NLR_CI), ~ NLR_CI[[.x]]$basic[4])
+si_performance$NLR.ucl <- map_dbl(1:length(NLR_CI), ~ NLR_CI[[.x]]$basic[5])
+
+print(si_performance, n = Inf, width = Inf)
+
+```
+
+The 'optimal' classification threshold according to Youden's *J* statistic was
+`r thres_best[[1]]`.
+
+### Pooled across all imputed datasets
+
+The ROC curve for the optimal model in each of the `r imp$m` multiply imputed
+datasets is shown below.
+
+```{r performance_pooled, warning=F, message=F}
+# Plot ROC for each imputed dataset
+roc_list <- list(NA)
+for (i in 1:imp$m){
+  fit <- glm(M7$formula, data = complete(imp, i), family = "binomial")
+  pred <- predict(fit, newdata = complete(imp, i), type = "response")
+  roc_list[[i]] <- roc(sepsis ~ pred, data = complete(imp, i), ci = T)
+}
+
+# Combine into one ROC plot
+palette <- grDevices::colors()[grep('gr(a|e)y|white', grDevices::colors(), invert = T)]
+set.seed(1234) # set seed for sampling colours
+ggroc_mi <- roc_list %>%
+  ggroc() +
+  scale_colour_manual(values = sample(palette, imp$m)) +
+  geom_abline(intercept = 1, colour = "grey") +
+  labs(x = "Specificity", y = "Sensitivity") +
+  theme_classic2(base_size = 18) +
+  theme(legend.position = "none") +
+  NULL
+
+ggroc_mi
+
+ggsave("Figures/figure2_ROC.png", ggroc_mi, width = 6, height = 6, dpi = 300)
+```
+
+We then applied Rubin's rules to get the pooled AUC across all imputed datasets.
+
+```{r performance_pooled2, warning=F, message=F}
+# Get AUC and variance for each imputation
+auc_df <- tibble(
+  imp = 1:!!imp$m,
+  auc = rep(NA_real_, !!imp$m),
+  var = rep(NA_real_, !!imp$m)
+  )
+for (i in 1:imp$m){
+  fit <- glm(M7$formula, data = complete(imp, i), family = "binomial")
+  pred <- predict(fit, newdata = complete(imp, i), type = "response")
+  auc <- auc(sepsis ~ pred, data = complete(imp, i))
+  auc_var <- var(auc)
+  auc_df[i,2] <- as.numeric(auc)
+  auc_df[i,3] <- auc_var
+}
+
+# Combine with Rubin's rules
+# Pooled point estimate of AUC is just the mean over M datasets
+mean_auc <- mean(auc_df$auc)
+# Pooled variance for auc is the var(auc) within m + var(auc) between m
+aucs <- auc_df$auc
+mean_var <- mean(auc_df$var)
+M <- imp$m
+pvar <- mean_var + (1 + 1/M) * (1/(M-1))*sum((aucs - mean_auc)^2) 
+
+# Final result
+lcl <- mean_auc - 1.96*sqrt(pvar)
+ucl <- mean_auc + 1.96*sqrt(pvar)
+auc_results <- cbind(auc = mean_auc, lcl = lcl, ucl = ucl)
+auc_results
+```
+
+The pooled AUC across the imputed datasets was `r round(auc_results[1], 3)`
+(95% CI `r round(auc_results[2], 3)`-`r round(auc_results[3], 3)`%).
+
+Finally, we estimated the regression coefficients and odds ratios for the optimal
+model, pooled across all imputed datasets:
+
+```{r optimal_model}
+imp_fit <- with(data = imp, 
+            exp = glm(sepsis ~ et_temp + et_rr + oh_matfever + oh_offliquor + co_prom + 
+                      oe_activity + oe_retractions + oe_grunt,
+                      family = "binomial")
+            )
+
+pooled_summary <- summary(pool(imp_fit))
+pooled_OR <- exp(cbind(pooled_summary[,2], (pooled_summary[,2]-1.96*(pooled_summary[,3])), 
+           (pooled_summary[,2]+1.96*(pooled_summary[,3])))) %>%
+  as.data.frame()
+
+pooled_df <- cbind(as.character(pooled_summary[,1]), pooled_summary[,2], pooled_summary[,3], pooled_OR, pooled_summary[,6])
+colnames(pooled_df) <- c("predictor", "beta", "SE", "OR", "lcl", "ucl", "p.value")
+
+# Round values
+pooled_df %>%
+  mutate(beta = round(beta, 3), SE = round(SE, 3), OR = round(OR, 2),
+         lcl = round(lcl, 2), ucl = round(ucl, 2), p.value = round(p.value, 4))
+```
+
+
+

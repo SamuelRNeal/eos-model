@@ -1,0 +1,243 @@
+---
+title: "7-DescriptiveStatistics"
+output:
+  pdf_document:
+    number_sections: yes
+    df_print: tibble
+    latex_engine: xelatex
+---
+
+```{r setup7, include=FALSE}
+library("knitr")
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, out.width="50%")
+# Set root directory from Rmd dir to project dir
+opts_knit$set(root.dir = "..")
+```
+
+```{r libraries7, include=FALSE}
+source("Scripts/0-setup.R")
+```
+
+```{r data7, include=FALSE}
+dat <- readRDS("Data/prepare2_dat.rds")
+```
+
+Descriptive analysis of included participants. Data are presented for the
+observed data only (i.e. before MICE) using pairwise deletion of missing values.
+
+## Distribution of continuous variables
+
+```{r distributions}
+t1_num <- c("pi_gest", "et_bw", "adm_dur")
+labels <- c("gestation (weeks)", "birth weight (grams)", "admission duration (days)")
+
+# All participants
+dat %>%
+  select(all_of(t1_num)) %>%
+  map2(labels, ~(
+    ggplot(data = dat, aes(x = .)) +
+      geom_histogram(bins = 12, fill = "grey30", colour = "black") +
+      labs(x = .y) +
+      theme_classic2() +
+      NULL
+    )
+)
+
+# Facet wrapped by sepsis vs. no sepsis
+dat %>%
+  select(all_of(t1_num)) %>%
+  map2(labels, ~(
+    ggplot(data = dat, aes(x = ., fill = dat$sepsis)) +
+      geom_histogram(bins = 12, colour = "black") +
+      scale_fill_brewer() +
+      labs(x = .y) +
+      theme_classic2() +
+      theme(legend.position = "none") +
+      facet_wrap(~ dat$sepsis, nrow = 2) +
+      NULL
+    )
+)
+
+```
+
+"Gestation" and "birth weight" are approximately normally distributed, while
+"admission duration" is very right-skewed.
+
+## Table 1
+
+Table summarising the characteristics of included participants:
+
+```{r table1}
+t1_vars <- c(
+  "pi_sex",
+  "pi_gest",
+  "et_bw",
+  "pi_age",
+  "pi_type",
+  "oh_delivery",
+  "adm_dur",
+  "outcome",
+  "sepsis"
+  )
+
+labels <- list(
+  pi_gest ~ "Gestational age",
+  et_bw ~ "Birth weight",
+  adm_dur ~ "Admission duration",
+  pi_sex ~ "Sex",
+  pi_age ~ "Chronological age",
+  pi_type ~ "Type of birth",
+  oh_delivery ~ "Mode of delivery",
+  outcome ~ "Death"
+)
+
+dat <- dat %>%
+  mutate(oh_delivery = fct_recode(
+    oh_delivery,
+    instrumental = "forceps",
+    instrumental = "ventouse"
+  ))
+
+dat %>%
+  mutate(outcome = if_else(outcome == "died", 1, 0)) %>%
+  select(all_of(t1_vars)) %>%
+  tbl_summary(
+    by = sepsis,
+    statistic = list(
+      c(pi_gest, et_bw) ~ "{mean} ({sd})",
+      adm_dur ~ "{median} [{p25}-{p75}]",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    label = labels,
+    missing = "no"
+  ) %>%
+  add_p(
+    test = list(
+      c(pi_gest, et_bw) ~ "t.test",
+      adm_dur ~ "wilcox.test",
+      c(pi_age, outcome) ~ "chisq.test.no.correct",
+      c(pi_sex, pi_type, oh_delivery) ~ "fisher.test"
+    )
+  ) %>%
+  add_overall() %>%
+  add_stat_label(
+    label = list(
+      pi_gest ~ "mean weeks (SD)",
+      et_bw ~ "mean grams (SD)",
+      adm_dur ~ "median days [Q1-Q3]",
+      all_categorical() ~ "n (%)"
+    )
+  ) %>%
+  modify_footnote(update = everything() ~ NA) %>%
+  as_kable_extra() %>% # to allow table to print in PDF output
+  add_footnote(
+    "p-values are from Welch’s two-sample t-test for gestational age and birth
+    weight; the Wilcoxon-Mann-Whitney U test for admission duration; Pearson’s
+    chi-squared test for age at admission and death; and Fisher’s exact test for
+    sex, type of birth and mode of delivery.",
+    notation = "none",
+    threeparttable = TRUE
+  )
+```
+
+<br />
+
+Data are presented for the observed data only (i.e. before MICE) using pairwise
+deletion of missing values. The number of missing values for each variable in
+the above table are as follows:
+
+```{r table1_missing}
+dat %>% select(all_of(t1_vars)) %>% miss_var_summary()
+```
+
+## Distribution of candidate predictors
+
+```{r predictors}
+predictors <- c(
+  "pi_gest",
+  "et_bw",
+  "oh_matfever",
+  "oh_offliquor",
+  "co_prom",
+  "et_grunt",
+  "et_cyanosis",
+  "et_seizures",
+  "et_rr",
+  "et_hr",
+  "et_temp",
+  "oe_fontanelle",
+  "oe_activity",
+  "oe_nasalflare",
+  "oe_retractions",
+  "oe_grunt",
+  "oe_wob",
+  "oe_colour",
+  "oe_abdodist",
+  "oe_omphalitis",
+  "oe_abskin",
+  "hx_vomit"
+)
+
+
+dat %>%
+  select(all_of(predictors), sepsis) %>%
+  tbl_summary(
+    by = sepsis,
+    statistic = list(all_continuous() ~ "{median} [{p25}-{p75}]",
+                     all_categorical() ~ "{n} ({p}%)"),
+    missing = "no"
+    ) %>%
+  add_p(
+    test = list(all_continuous() ~ "wilcox.test",
+                all_categorical() ~ "fisher.test")
+  ) %>%
+  add_overall() %>%
+  as_gt(include = -tab_footnote) %>%
+  tab_footnote(
+    footnote = "Data are presented as median [Q1-Q3] for continuous predictors
+    or n (%) for categorical predictors. p-values are from the Wilcoxon-Mann-Whitney
+    U test for continuous predictors and Fisher’s exact test for categorical
+    predictors.",
+    locations = cells_column_labels(columns = vars(p.value))
+  )
+```
+
+<br />
+
+Data are presented for the observed data only (i.e. before MICE) using pairwise
+deletion of missing values. The number of missing values for each variable in
+the above table are as follows:
+
+```{r predictors_missing}
+dat %>% select(all_of(predictors)) %>% miss_var_summary()
+```
+
+### Box plots of continuous candidate predictors
+
+The box plots below show the distribution of the continuous candidate predictors
+between participants with and without sepsis.
+
+```{r predictors_boxplots}
+predictors_num <- c(
+  "pi_gest",
+  "et_bw",
+  "et_rr",
+  "et_hr",
+  "et_temp"
+  )
+
+dat %>%
+  select(all_of(predictors_num)) %>%
+  map2(predictors_num, ~(
+    ggplot(data = dat, aes(x = dat$sepsis, y = ., fill = dat$sepsis)) +
+      geom_boxplot(colour = "black") +
+      scale_fill_brewer() +
+      labs(y = .y, x = "sepsis") +
+      coord_flip() +
+      theme_classic2() +
+      theme(legend.position = "none") +
+      NULL
+    )
+)
+```
+

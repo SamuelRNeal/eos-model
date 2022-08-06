@@ -1,0 +1,11 @@
+.Rhistory
+.RData
+.Rproj.user
+.Rprofile
+*.DS_Store
+Data/
+_Raw_json/
+potential_matches_reviewed210110.xlsx
+potential_matches210110.csv
+potential_matches.csv
+git_setup.R

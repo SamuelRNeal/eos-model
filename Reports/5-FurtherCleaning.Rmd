@@ -1,0 +1,1748 @@
+---
+title: "5-FurtherCleaning"
+output:
+  pdf_document:
+    number_sections: yes
+    df_print: tibble
+    latex_engine: xelatex
+---
+
+```{r setup5, include=FALSE}
+library("knitr")
+knitr::opts_chunk$set(echo = FALSE, out.width="50%")
+# Set root directory from Rmd dir to project dir
+opts_knit$set(root.dir = "..")
+```
+
+```{r libraries5, include=FALSE}
+source("Scripts/0-setup.R")
+```
+
+```{r data5, include=FALSE}
+raw_dat <- readRDS("Data/linked_df.rds")
+```
+
+Elaboration on creating/extracting relevant variables required for model
+development from the Neotree dataset at Sally Mugabe Central Hospital.
+
+## Data collected by admission forms
+
+There are 7 sections to the Neotree admission form at SMCH, Zimbabwe.
+
+1. Emergency triage & vital signs
+2. Patient information
+3. Examination
+4. Symptom review
+5. Place of origin
+6. Maternal history
+7. Provisional diagnoses
+
+*N.B. Other data are collected by the app, but only relevant variables are
+detailed here.*
+
+### Emergency triage & vital signs
+
+The variables to be subset/created from this section are as follows:
+
+Parent variable          | New variable(s)        | Comments
+-------------------------|------------------------|----------------------------
+Admission.DangerSigns    | et_grunt               | "Grun" (yes/no)
+""                       | et_cyanosis            | "Cyan" (yes/no)
+""                       | et_seizures            | "Conv" (yes/no)
+Admission.RR             | et_rr                  | (numeric)
+Admission.HR             | et_hr                  | (numeric)
+Admission.Temperature    | et_temp                | (numeric)
+Admission.BW             | et_bw                  | (numeric)
+Admission.AW             | *informs* et_bw        | (numeric)
+
+#### Admission.DangerSigns
+
+Categorical variable with four levels:
+
+* Grun = "Grunting or severe chest indrawings"
+* Cyan = "Central cyanosis"
+* Conv = "Convulsions or twitchings"
+* None
+
+Recoded into three separate variables: `et_grunt`, `et_cyanosis` and
+`et_seizures`.
+
+```{r Admission.DangerSigns}
+# Create new data frame that will store 'cleaned' variables
+clean_dat <- raw_dat
+
+# Check coding & frequencies
+print("Original variable")
+table(raw_dat$Admission.DangerSigns, useNA = "always")
+
+# Create new variables
+clean_dat <- clean_dat %>%
+  mutate(
+    et_grunt = factor(
+      case_when(
+        is.na(Admission.DangerSigns) ~ NA_character_,
+        grepl("Grun", Admission.DangerSigns) ~ "yes",
+        TRUE ~ "no"
+      )
+    ),
+    et_cyanosis = factor(
+      case_when(
+        is.na(Admission.DangerSigns) ~ NA_character_,
+        grepl("Cyan", Admission.DangerSigns) ~ "yes",
+        TRUE ~ "no"
+      )
+    ),
+    et_seizures = factor(
+      case_when(
+        is.na(Admission.DangerSigns) ~ NA_character_,
+        grepl("Conv", Admission.DangerSigns) ~ "yes",
+        TRUE ~ "no"
+      )
+    )
+  )
+
+# Check new variables
+print("New variables")
+clean_dat %>%
+  select(et_grunt, et_cyanosis, et_seizures) %>%
+  summary()
+```
+
+#### Admission.RR
+
+Continuous variable measured in breaths per minute.
+
+* Some recorded values were very low (i.e. <20 breaths per minute).
+    + On inspection, most died suggesting the recorded values were correct.
+    + Some neonates were recorded as surviving to discharge with an initial RR
+    < 10, despite receiving no resuscitation. This is implausible and their RR
+    was set to missing.
+* Similarly, some recorded values were very high (i.e. >100 breaths per minute).
+    + After reviewing the distribution, we truncated these data to the 99.5th
+    percentile, setting greater values to missing.
+
+```{r Admission.RR}
+# Check coding & distribution
+summary(as.numeric(raw_dat$Admission.RR))
+hist(as.numeric(raw_dat$Admission.RR), breaks = 192)
+quantile(
+  as.numeric(raw_dat$Admission.RR),
+  p = c(0, 0.005, 0.01, 0.5, 0.99, 0.995, 1),
+  na.rm = TRUE
+)
+print("Lowest 10 values")
+head(table(as.numeric(raw_dat$Admission.RR)), 10)
+print("Highest 20 values")
+tail(table(as.numeric(raw_dat$Admission.RR)), 20)
+
+# Explore cases where RR <20
+print("Cases where RR <20")
+clean_dat %>%
+  select(
+    Admission.RR,
+    Admission.Gestation,
+    Admission.Resus,
+    Discharge.NeoTreeOutcome
+  ) %>%
+  mutate(Admission.RR = as.numeric(Admission.RR)) %>%
+  filter(Admission.RR < 20) %>%
+  print(n = Inf)
+
+# Create new variable (invalid values set to NA)
+clean_dat <- clean_dat %>%
+  mutate(
+    et_rr = as.numeric(Admission.RR),
+    et_rr = if_else(
+      et_rr < 10 & Discharge.NeoTreeOutcome == "DC",
+      NA_real_,
+      et_rr
+    ),
+    et_rr = if_else(
+      et_rr > quantile(et_rr, .995, na.rm = T),
+      NA_real_,
+      et_rr
+    )
+  )
+
+# Check new variable
+print("New variable")
+clean_dat %>%
+  select(et_rr) %>%
+  summary()
+hist(clean_dat$et_rr, breaks = 192)
+```
+
+#### Admission.HR
+
+Continuous variable measured in beats per minute.
+
+* Some recorded values were very low (i.e. <50 beats per minute).
+    + On inspection, most died suggesting the recorded values were correct.
+    + Some neonates were recorded as surviving to discharge with an initial HR
+    < 20, despite receiving no resuscitation. This is implausible and their HR
+    was set to missing.
+
+```{r Admission.HR}
+# Check coding & distribution
+summary(as.numeric(raw_dat$Admission.HR))
+hist(as.numeric(raw_dat$Admission.HR), breaks = 100)
+quantile(
+  as.numeric(raw_dat$Admission.HR),
+  p = c(0, 0.001, 0.01, 0.5, 0.99, 0.999, 1),
+  na.rm = TRUE
+)
+print("Lowest 10 values")
+head(table(as.numeric(raw_dat$Admission.HR)), 10)
+print("Highest 20 values")
+tail(table(as.numeric(raw_dat$Admission.HR)), 20)
+
+# Explore cases where HR <50
+print("Cases where HR <50")
+clean_dat %>%
+  select(
+    Admission.HR,
+    Admission.RR,
+    Admission.Resus,
+    Discharge.NeoTreeOutcome,
+    Admission.Gestation
+  ) %>%
+  mutate(Admission.HR = as.numeric(Admission.HR)) %>%
+  filter(Admission.HR < 50) %>%
+  print(n = Inf)
+
+# Create new variable (invalid values set to NA)
+clean_dat <- clean_dat %>%
+  mutate(
+    et_hr = as.numeric(Admission.HR),
+    et_hr = if_else(
+      et_hr < 20 & Discharge.NeoTreeOutcome == "DC",
+      NA_real_,
+      et_hr
+    )
+  )
+
+# Check new variable
+print("New variable")
+clean_dat %>%
+  select(et_hr) %>%
+  summary()
+hist(clean_dat$et_hr, breaks = 192)
+```
+
+#### Admission.Temperature
+
+Continuous variable measured in degrees Celsius (to 0.1 precision).
+
+```{r Admission.Temperature}
+# Check coding & distribution
+summary(as.numeric(raw_dat$Admission.Temperature))
+hist(as.numeric(raw_dat$Admission.Temperature), breaks = 200)
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(et_temp = as.numeric(Admission.Temperature))
+
+# Check new variable
+clean_dat %>%
+  select(et_temp) %>%
+  summary()
+```
+
+#### Admission.BW & Admission.AW
+
+Continuous variables measured in grams.
+
+* Looking at the distributions of birth weight (BW) and admission weight (AW),
+some values are clearly invalid.
+* It is important not to assume what these values should be
+(e.g., for "100" the true value may have been "1000", or perhaps "3100").
+
+```{r Admission.BW}
+# Check coding & distribution (BW)
+print("Distribution of birth weight")
+summary(as.numeric(raw_dat$Admission.BW))
+hist(as.numeric(raw_dat$Admission.BW), breaks = 200)
+print("Lowest values")
+head(table(as.numeric(raw_dat$Admission.BW)), 26)
+
+# Check coding & distribution (AW)
+print("Distribution of admission weight")
+summary(as.numeric(raw_dat$Admission.AW))
+hist(as.numeric(raw_dat$Admission.AW), breaks = 200)
+print("Lowest values")
+head(table(as.numeric(raw_dat$Admission.AW)), 21)
+
+# Explore cases where BW or AW <500g
+print("Cases where BW or AW <500g")
+raw_dat %>%
+  select(
+    Admission.session,
+    Admission.BW,
+    Admission.AW,
+    Admission.Gestation,
+    Admission.AgeB,
+    Admission.AdmReason,
+    Discharge.NeoTreeOutcome
+  ) %>%
+  mutate(
+    Admission.BW = as.numeric(Admission.BW),
+    Admission.AW = as.numeric(Admission.AW)
+  ) %>%
+  filter(Admission.BW < 500 | Admission.AW < 500)
+```
+
+Therefore, we assessed how many cases have BW and/or AW missing, and whether it is
+necessary to have two weight variables (i.e., do BW and AW substantially differ?):
+
+```{r Admission.BW2}
+# Examine missingness of BW and AW
+print("Birth weight missing")
+sum(is.na(raw_dat$Admission.BW))
+print("Admission weight missing")
+sum(is.na(raw_dat$Admission.AW))
+print("Birth weight missing but admission weight NOT missing")
+sum(is.na(raw_dat$Admission.BW) & !is.na(raw_dat$Admission.AW))
+
+# Examine only cases where BW and AW differ
+print("Cases where BW and AW differ (and AW not missing)")
+raw_dat %>%
+  select(
+    Admission.session,
+    Admission.BW,
+    Admission.AW,
+    Admission.AgeB
+  ) %>%
+  mutate(
+    Admission.BW = as.numeric(Admission.BW),
+    Admission.AW = as.numeric(Admission.AW)
+  ) %>%
+  filter(Admission.BW != Admission.AW) %>%
+  print(n = Inf)
+```
+
+* There are only `r sum(raw_dat$Admission.BW != raw_dat$Admission.AW, na.rm=T)`
+cases where BW and AW differ.
+    + Examining these cases, the differences are relatively small (excluding cases
+    where the value is obviously erroneous). Therefore, it is unnecessary to
+    have a separate variable for AW, and BW will suffice.
+* Some values were recorded as very low (i.e. <500g).
+    + If BW is consistent with the gestational age, the original value is
+    retained.
+    + If BW is inconsistent with gestational age but AW is consistent, then
+    `et_bw` takes the value of AW.
+    + Otherwise, if neither BW or AW consistent with gestational age (or AW missing),
+    then original BW value retained and case will be excluded based on
+    inclusion/exclusion criteria for birth weight (see below).
+    + *N.B. We used the UK-WHO Neonatal and Infant Close Monitoring Growth
+    Chart 2009 to determine weights consistent with each gestational age.*
+
+```{r Admission.BW3}
+# Define sessions where et_bw takes value of admission weight
+take_aw <- c("\\s98096$", "\\s10931$", "\\s43069$", "\\s28066$")
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(
+    et_bw = as.numeric(
+      case_when(
+        grepl(paste(take_aw, collapse = "|"), Admission.session) ~ Admission.AW,
+        TRUE ~ Admission.BW # also retains original NA values
+      )
+    )
+  )
+
+# Check new variable
+print("New variable")
+clean_dat %>%
+  select(et_bw) %>%
+  summary()
+hist(clean_dat$et_bw, breaks = 200)
+```
+
+### Patient information
+
+The variables to be subset/created from this section are as follows:
+
+Parent variable               | New variable(s)   | Comments
+------------------------------|-------------------|----------------------------
+Admission.AdmReason           | *informs* pi_bba  | "BBA" (yes/no)
+""                            | pi_admreason      | *takes original values* (factor)
+Admission.UID                 | adm_uid           | (string)
+Admission.session             | adm_session       | (string)
+Admission.DateTimeAdmission   | adm_datetime      | (date-time)
+Admission.Gender              | pi_sex            | *takes original values* (factor)
+Admission.AgeA/B/Cat/C        | pi_age            | (numeric)
+Admission.TypeBirth           | pi_type           | (factor)
+Admission.Gestation           | pi_gest           | (numeric)
+
+#### Admission.AdmReason
+
+Categorical variable with many levels. No changes made to original data.
+
+```{r Admission.AdmReason}
+# Check coding & frequencies
+table(raw_dat$Admission.AdmReason, useNA = "always")
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(pi_admreason = factor(Admission.AdmReason))
+
+# Check new variable
+clean_dat %>%
+  select(pi_admreason) %>%
+  summary()
+```
+
+#### Admission.UID & Admission.session
+
+String variables. No changes made to original data.
+
+* Admission.UID = the unique identifier for each baby, automatically
+generated by the Neotree app when a new admission form is created.
+* Admission.UID_alphanum = Admission.UID but with non-alphanumeric characters
+removed. Used for record linkage.
+* Admission.session = a unique number assigned to each row of data when imported
+from the raw JSON files (i.e., `seq_along(1:nrow(data))`). Can be used to merge
+columns from the other data frames if needed in later analyses.
+
+```{r Admission.UID}
+# Check coding
+print("Admission.UID")
+head(raw_dat$Admission.UID)
+print("Admission.UID_alphanum")
+head(raw_dat$Admission.UID_alphanum)
+print("Admission.session")
+head(raw_dat$Admission.session)
+
+# Create new variables (only need to rename)
+clean_dat <- clean_dat %>%
+  rename(
+    adm_uid = "Admission.UID",
+    adm_session = "Admission.session"
+  )
+```
+
+#### Admission.DateTimeAdmission
+
+String variable representing a date. Converted to POSIXct object.
+
+* The period prior to 1^st^ February 2019 was a 'pilot period'.
+    + During this period, healthcare workers were becoming accustomed to the
+    Neotree app and only a subset of admissions and outcomes were recorded.
+
+```{r Admission.DateTimeAdmission}
+# Check coding
+head(raw_dat$Admission.DateTimeAdmission)
+
+# Create new variable
+print("New variable")
+clean_dat <- clean_dat %>%
+  mutate(
+    adm_datetime = ymd_hms(
+      Admission.DateTimeAdmission,
+      tz = "Africa/Harare"
+    )
+  )
+
+# Check new variable
+clean_dat %>%
+  select(adm_datetime) %>%
+  summary()
+#head(clean_dat$adm_datetime)
+
+# Bar graph of admissions per month
+clean_dat %>%
+  ggplot(aes(x = floor_date(adm_datetime, unit = "months"))) +
+  geom_bar() +
+  scale_x_datetime(date_breaks = "2 months", date_labels = "%b %y") +
+  annotate(
+    "rect",
+    xmin = as.POSIXct("2019-08-16"), xmax = as.POSIXct("2020-01-17"),
+    ymin = 0, ymax = Inf,
+    alpha = .2, fill = "red"
+  ) +
+  annotate(
+    "label",
+    x = as.POSIXct("2019-11-01"), y = 350,
+    label = "Doctors' strike"
+  ) +
+  labs(
+    x = "month",
+    y = "admissions"
+  ) +
+  NULL
+```
+
+#### Admission.Gender
+
+Categorical variable with three levels.
+
+* Male
+* Female
+* Unsure
+
+No changes made to original data.
+
+```{r Admission.Gender}
+# Check coding & frequencies
+table(raw_dat$Admission.Gender, useNA = "always")
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(pi_sex = factor(
+    case_when(
+      is.na(Admission.Gender) ~ NA_character_,
+      Admission.Gender == "M" ~ "m",
+      Admission.Gender == "F" ~ "f",
+      Admission.Gender == "U" ~ "u"
+    )
+  ))
+
+# Check new variable
+print("New variable")
+clean_dat %>%
+  select(pi_sex) %>%
+  summary()
+```
+
+#### Admission.AgeA/B/Cat/C
+
+Categorical or string variables representing age at admission:
+
+* Admission.AgeA = Is the baby aged less than 1 week?
+    + Binary categorical variable: yes (Y) or no (N)
+* Admission.AgeB = If AgeA = yes, the baby's age to the nearest hour
+    + String varible in the format `X days, Y hours`
+* Admission.AgeCat = If AgeA = yes, the age category that the baby falls into
+    + Categorical variable with 5 levels:
+        + Fresh newborn (<2 hours-old)
+        + Newborn 2-23 hours-old
+        + Newborn 24-47 hours-old
+        + Infant 48-71 hours-old
+        + Infant ≥72 hours-old
+* Admission.AgeC = If AgeA = no, the baby's age to the nearest day
+    + String variable in the format `X days`
+
+N.B. If the reason for admission is "dumped baby", then age is not recorded.
+
+```{r Admission.Age}
+# Check missingness of each age variable
+raw_dat %>%
+  select(
+    Admission.AgeA,
+    Admission.AgeB,
+    Admission.AgeCat,
+    Admission.AgeC
+  ) %>%
+  miss_var_summary()
+
+# Check how many are missing both AgeB and AgeCat
+print("Missing both AgeB and AgeCat")
+sum(is.na(clean_dat$Admission.AgeB) & is.na(clean_dat$Admission.AgeCat))
+```
+
+All age variables have a high proportion of missingness except Admission.AgeCat
+and Admission.AgeA.
+
+* Since Admission.AgeA is a simple binary question of whether the baby is less
+than one week-old, using Admission.AgeCat is more informative.
+* This means age will be a categorical variable rather than a continuous
+variable, but this is preferable to reduce the proportion of missing values.
+
+We can transform Admission.AgeB into a continuous variable of age in hours, and
+then check to ensure Admission.AgeB is congruent with Admission.AgeCat:
+
+```{r Admission.Age2}
+# Check coding of AgeB
+print("Admission.AgeB, original")
+head(clean_dat$Admission.AgeB, 20)
+
+# Note some anomalies - negative values, or >1 week-old
+print("Note some anomalies: negative values or >1 week-old")
+clean_dat$Admission.AgeB[grepl("month|-", clean_dat$Admission.AgeB)]
+
+# Remove invalid values, then create new variable of age in hours
+clean_dat <- clean_dat %>%
+  mutate(
+    ageb = if_else(
+      grepl("month|-", Admission.AgeB),
+      NA_character_,
+      Admission.AgeB
+    )
+  ) %>%
+  mutate(
+    aged = as.numeric(str_extract(ageb, "\\d+\\b(?=\\sday)")),
+    ageh = as.numeric(str_extract(ageb, "\\d+\\b(?=\\shour)"))
+  ) %>%
+  mutate(
+    aged = case_when(
+      !is.na(aged) ~ aged,
+      is.na(ageb) ~ NA_real_,
+      TRUE ~ 0
+    ),
+    ageh = case_when(
+      !is.na(ageh) ~ ageh,
+      is.na(ageb) ~ NA_real_,
+      TRUE ~ 0
+    )
+  ) %>%
+  mutate(age_hours = aged * 24 + ageh) %>%
+  select(-c(ageb, aged, ageh))
+
+# Check this new age in hours variable
+print("Check this new variable, age in hours")
+clean_dat %>%
+  select(Admission.AgeB, age_hours) %>%
+  head(10)
+clean_dat %>%
+  select(age_hours) %>%
+  summary()
+hist(clean_dat$age_hours, breaks = 200)
+
+# Create a new variable to check age_hours matches 'Admission.AgeCat'
+# Uses same labels as Admission.AgeCat, but labels assign based on age_hours
+print("Generate agecat_new based on age_hours values")
+clean_dat <- clean_dat %>%
+  mutate(
+    agecat = Admission.AgeCat,
+    agecat_new = cut(
+      age_hours,
+      breaks = c(0, 2, 24, 48, 72, Inf),
+      right = FALSE, # open on the right
+      labels = c("FNB", "NB24", "NB48", "INF72", "INF"),
+      ordered_result = FALSE
+    )
+  )
+
+# Check whether agecat = agecat_new
+print("Cases where agecat != agecat_new")
+clean_dat %>%
+  filter(agecat != as.character(agecat_new)) %>%
+  nrow()
+
+# Explore some of these discrepancies
+clean_dat %>%
+  filter(agecat != as.character(agecat_new)) %>%
+  select(
+    Admission.AgeA,
+    age_hours,
+    agecat,
+    agecat_new,
+    Admission.AgeC
+  ) %>%
+  head()
+```
+
+There are some discrepancies between the age from Admission.AgeB (automatically
+generated by the app from date-time of birth and admission date-time) and the
+age category selected by the healthcare workers (recorded as Admission.AgeCat).
+
+* These discrepancies occur in relatively few cases and likely represent a
+misunderstanding of the age category definitions by healthcare workers using
+the app.
+* As Admission.AgeB is generated automatically by the app, it is less liable to
+errors than Admission.AgeCat.
+* Therefore, the following rules will be applied to create the age variable:
+    + Where Admission.AgeB is *not* missing, we use this variable to assign the
+    age category.
+    + Where Admission.AgeB is missing but Admission.AgeCat is *not* missing, we
+    use the value of Admission.AgeCat.
+    + Where Admission.AgeCat is missing but Admission.Age == "N", then the baby
+    is older than one week, so is assigned to the "infant" category.
+    + Where all the above are missing, the new age variable is missing.
+
+```{r Admission.Age3}
+# Create new age variable using the above rules
+clean_dat <- clean_dat %>%
+  mutate(
+    pi_age = if_else(
+      is.na(agecat_new),
+      agecat,
+      as.character(agecat_new)
+    )
+  ) %>%
+  mutate(
+    pi_age = if_else(
+      is.na(pi_age) & Admission.AgeA == "N",
+      "INF",
+      pi_age
+    )
+  )
+
+# Ensure all cases where AgeA == "N" are assigned to "INF"
+sum(clean_dat$Admission.AgeA == "N" & clean_dat$pi_age != "INF", na.rm = TRUE)
+
+# Explore these anomalies
+clean_dat %>%
+  filter(Admission.AgeA == "N" & pi_age != "INF") %>%
+  select(
+    Admission.AgeA,
+    Admission.AgeB,
+    agecat,
+    pi_age
+  )
+
+# Recode and format the new age variable
+clean_dat <- clean_dat %>%
+  mutate(
+    pi_age = as.factor(pi_age),
+    pi_age = fct_relevel(
+      pi_age,
+      "FNB",
+      "NB24",
+      "NB48",
+      "INF72",
+      "INF"
+    ),
+    pi_age = fct_recode(
+      pi_age,
+      fnb = "FNB",
+      dol1 = "NB24",
+      dol2 = "NB48",
+      dol3 = "INF72",
+      older = "INF"
+    )
+  )
+
+# Check new variable
+clean_dat %>%
+  select(pi_age) %>%
+  summary()
+plot(addNA(clean_dat$pi_age)) # addNA explicitly plots NA category
+```
+
+There are several cases where Admission.AgeA would suggest the baby is $\geq$ 1
+week-old, yet Admission.AgeB (and, thus, pi_age) does not correlate with this.
+Admission.AgeB is likely the most accurate source of age and so this value will
+be used.
+
+#### Admission.TypeBirth
+
+Categorical variable with six levels:
+
+* Singleton
+* Twin number 1
+* Twin number 2
+* Triplet number 1
+* Triplet number 2
+* Triplet number 3
+
+No changes made to original data.
+
+```{r Admission.TypeBirth}
+# Checking coding & frequencies
+table(raw_dat$Admission.TypeBirth, useNA = "always")
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(
+    pi_type = factor(Admission.TypeBirth),
+    pi_type = fct_recode(
+      pi_type,
+      singleton = "S",
+      twin1 = "Tw1",
+      twin2 = "Tw2",
+      triplet1 = "Tr1",
+      triplet2 = "Tr2",
+      triplet3 = "Tr3"
+    ),
+    pi_type = fct_relevel(
+      pi_type,
+      "singleton",
+      "twin1",
+      "twin2",
+      "triplet1",
+      "triplet2",
+      "triplet3"
+    )
+  )
+
+# Check new variable
+clean_dat %>%
+  select(pi_type) %>%
+  summary()
+```
+
+#### Admission.Gestation
+
+Continuous variable measured in weeks. No changes made to original data.
+
+```{r Admission.Gestation}
+# Check coding & distribution
+summary(as.numeric(raw_dat$Admission.Gestation))
+hist(as.numeric(raw_dat$Admission.Gestation), breaks = 30)
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(pi_gest = as.numeric(Admission.Gestation))
+
+# Check new variable
+clean_dat %>%
+  select(pi_gest) %>%
+  summary()
+```
+
+### Examination
+
+The variables to be subset/created from this section are as follows:
+
+Parent variable               | New variable(s)   | Comments
+------------------------------|-------------------|----------------------------
+Admission.Fontanelle          | oe_fontanelle     | *takes values* (factor)
+Admission.Activity            | oe_activity       | *takes values* (factor)
+Admission.SignsRD             | oe_nasalflare     | "NFL" (yes/no)
+""                            | oe_retractions    | "CHI" (yes/no)
+""                            | oe_grunt          | "GR" (yes/no)
+Admission.WOB                 | oe_wob            | *takes values* (factor), add "normal" if SignsRD == "None", NA if SignsRD missing
+Admission.Colour              | oe_colour         | *takes values* (factor)
+Admission.Abdomen             | oe_abdodist       | "Dist" (yes/no)
+Admission.Umbilicus           | oe_omphalitis     | "Inf" (yes/no)
+Admission.Skin                | oe_abskin         | not "None" (yes/no)
+
+#### Admission.Fontanelle
+
+Categorical variable with three levels:
+
+* Bulging = "Bulging"
+* Flat = "Flat"
+* Sunken = "Sunken"
+
+No changes made to original data.
+
+```{r Admission.Fontanelle}
+# Checking coding & distribution
+table(raw_dat$Admission.Fontanelle, useNA = "always")
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(
+    oe_fontanelle = factor(Admission.Fontanelle),
+    oe_fontanelle = fct_recode(
+      oe_fontanelle,
+      bulging = "Bulg",
+      flat = "Flat",
+      sunken = "Sunk"
+    ),
+    oe_fontanelle = fct_relevel(
+      oe_fontanelle,
+      "flat",
+      "sunken",
+      "bulging"
+    )
+  )
+
+#  Check new variable
+clean_dat %>%
+  select(oe_fontanelle) %>%
+  summary()
+```
+
+#### Admission.Activity
+
+Categorical variable with five levels:
+
+* Alert = "Alert, active, appropriate"
+* Coma = "Coma (unresponsive)"
+* Convulsions = "Seizures, convulsions, or twitchings"
+* Irritable = "Irritable"
+* Lethargic = "Lethargic, quiet, decreased activity"
+
+No changes made to original data.
+
+```{r Admission.Activity}
+# Check coding & distribution
+table(raw_dat$Admission.Activity, useNA = "always")
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(
+    oe_activity = factor(Admission.Activity),
+    oe_activity = fct_recode(
+      oe_activity,
+      alert = "Alert",
+      coma = "Coma",
+      seizures = "Conv",
+      irritable = "Irrit",
+      lethargic = "Leth"
+    ),
+    oe_activity = fct_relevel(
+      oe_activity,
+      "alert",
+      "lethargic",
+      "irritable",
+      "seizures",
+      "coma"
+    )
+  )
+
+# Check new variable
+clean_dat %>%
+  select(oe_activity) %>%
+  summary()
+```
+
+#### Admission.SignsRD
+
+Categorical variable with five levels:
+
+* Chest retractions = "Chest in-drawings"
+* Grunting = "Grunting"
+* Nasal flaring = "Nasal flaring"
+* ~~Gasping = "Gasping"~~
+* ~~Stridor = "Stridor"~~
+* ~~Head nodding = "Head nodding"~~
+* ~~Tracheal tug = "Tracheal tug"~~
+* None
+
+Of these, only the first three categories are candidate predictors for this study.
+No changes made to original data.
+
+```{r Admission.SignsRD}
+# Check coding & distribution
+table(raw_dat$Admission.SignsRD, useNA = "always")
+
+# Create new variables
+clean_dat <- clean_dat %>%
+  mutate(
+    oe_nasalflare = factor(
+      case_when(
+        is.na(Admission.SignsRD) ~ NA_character_,
+        grepl("NFL", Admission.SignsRD) ~ "yes",
+        TRUE ~ "no"
+      )
+    ),
+    oe_retractions = factor(
+      case_when(
+        is.na(Admission.SignsRD) ~ NA_character_,
+        grepl("CHI", Admission.SignsRD) ~ "yes",
+        TRUE ~ "no"
+      )
+    ),
+    oe_grunt = factor(
+      case_when(
+        is.na(Admission.SignsRD) ~ NA_character_,
+        grepl("GR", Admission.SignsRD) ~ "yes",
+        TRUE ~ "no"
+      )
+    )
+  )
+
+# Check new variables
+clean_dat %>%
+  select(oe_nasalflare, oe_retractions, oe_grunt) %>%
+  summary()
+```
+
+#### Admission.WOB
+
+Categorical variable with three levels:
+
+* Mildly increased work of breathing (WOB) = "Mild"
+* Moderately increased WOB = "Moderate"
+* Severely increased WOB = "Severe"
+
+N.B. At the time of study, this variable was only completed if Admission.SignsRD
+was recorded as "nasal flaring", "chest retractions", "head nodding", "grunting",
+or "tracheal tug". A value was *not* entered if Admission.SignsRD was recorded as
+"gasping" or "stridor".
+
+The following rules were applied to create the new WOB variable:
+
+* NA if Admission.SignsRD is NA;
+* "normal" if Admission.SignsRD == "none";
+* NA if Admission.SignsRD == "gasping" or "stridor".
+
+```{r Admission.WOB}
+# Check coding & distribution
+table(raw_dat$Admission.WOB, useNA = "always")
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(
+    oe_wob = factor(
+      case_when(
+        is.na(Admission.SignsRD) ~ NA_character_,
+        Admission.SignsRD == "None" ~ "normal",
+        TRUE ~ Admission.WOB
+      )
+    ),
+    oe_wob = fct_recode(
+      oe_wob,
+      mild = "Mild",
+      moderate = "Mod",
+      severe = "Sev"
+    ),
+    oe_wob = fct_relevel(
+      oe_wob,
+      "normal",
+      "mild",
+      "moderate",
+      "severe"
+    )
+  )
+
+# Check new variable
+clean_dat %>%
+  select(oe_wob) %>%
+  summary()
+head(clean_dat$oe_wob)
+```
+
+#### Admission.Colour
+
+Categorical variable with four levels:
+
+* Pink = "Pink"
+* Blue = "Blue"
+* White = "White"
+* Yellow = "Yellow"
+
+No changes made to original data.
+
+```{r Admission.Colour}
+# Check coding & distribution
+table(raw_dat$Admission.Colour, useNA = "always")
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(
+    oe_colour = factor(Admission.Colour),
+    oe_colour = fct_recode(
+      oe_colour,
+      blue = "Blue",
+      pink = "Pink",
+      pale = "White",
+      yellow = "Yell"
+    ),
+    oe_colour = fct_relevel(
+      oe_colour,
+      "pink",
+      "pale",
+      "blue",
+      "yellow"
+    )
+  )
+
+# Check new variable
+clean_dat %>%
+  select(oe_colour) %>%
+  summary()
+```
+
+#### Admission.Abdomen
+
+Categorical variable with eight levels:
+
+* Distended = "Distended"
+* ~~Hepatomegaly = "Hepatomegaly"~~
+* ~~Splenomegaly = "Splenomegaly"~~
+* ~~Abdominal mass = "Abdominal mass"~~
+* ~~Gastroschisis = "Gastroschisis"~~
+* ~~Omphalocele = "Omphalocele"~~
+* ~~Prune belly = "Prune belly"~~
+* Normal = "Soft and normal"
+
+Of these, only abdominal distention is a candidate predictor for this study.
+No changes made to original data.
+
+```{r Admission.Abdomen}
+# Check coding & distribution
+table(raw_dat$Admission.Abdomen, useNA = "always")
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(oe_abdodist = factor(
+    case_when(
+      is.na(Admission.Abdomen) ~ NA_character_,
+      grepl("Dist", Admission.Abdomen) ~ "yes",
+      TRUE ~ "no"
+    )
+  ))
+
+# Check new variable
+clean_dat %>%
+  select(oe_abdodist) %>%
+  summary()
+```
+
+#### Admission.Umbilicus
+
+Categorical variable with four levels:
+
+* Infected = "Red skin all around umbilicus"
+* ~~Blood-stained = "Bleeding"~~
+* ~~Meconium-stained = "Meconium stained"~~
+* ~~Abnormal = "Abnormal looking"~~
+* ~~Hernia = "Umbilical hernia"~~
+* Normal = "Healthy and clean"
+
+Of these, only omphalitis (i.e. "infected" umbilicus) is a candidate predictor
+for this study.
+No changes made to original data.
+
+```{r Admission.Umbilicus}
+# Check coding & distribution
+table(raw_dat$Admission.Umbilicus, useNA = "always")
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(oe_omphalitis = factor(
+    case_when(
+      is.na(Admission.Umbilicus) ~ NA_character_,
+      grepl("Inf", Admission.Umbilicus) ~ "yes",
+      TRUE ~ "no"
+    )
+  ))
+
+# Check new variable
+clean_dat %>%
+  select(oe_omphalitis) %>%
+  summary()
+```
+
+#### Admission.Skin
+
+Categorical variable with four levels:
+
+* Pustules = "Pustules all over"
+* Abscess = "Big boil/abscess"
+* Rash = "Other skin rash"
+* None = "Normal"
+
+Due to distribution of categories, dichotomised into "abnormal skin" yes/no.
+
+```{r Admission.Skin}
+# Check coding & distribution
+table(raw_dat$Admission.Skin, useNA = "always")
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(oe_abskin = factor(
+    case_when(
+      is.na(Admission.Skin) ~ NA_character_,
+      grepl("None", Admission.Skin) ~ "no",
+      TRUE ~ "yes"
+    )
+  ))
+
+# Check new variable
+clean_dat %>%
+  select(oe_abskin) %>%
+  summary()
+```
+
+
+### Symptom review
+
+The variables to be subset/created from this section are as follows:
+
+Parent variable               | New variable(s)   | Comments
+------------------------------|-------------------|----------------------------
+Admission.Vomiting            | hx_vomit          | *modified values* (factor)
+
+#### Admission.Vomiting
+
+Categorical variable with five levels:
+
+* Yes, vomiting = "Vomiting all feeds"
+* Yes, green vomit = "Vomiting bright green"
+* Yes, bloody vomit = "Vomiting with blood"
+* Posseting = "Small milky possets after feeds (normal)"
+* No vomiting = "NONE"
+
+In the original variable, some cases were coded with multiple categories. The
+new variable was recoded to ensure mutually exclusive groups.
+
+```{r Admission.Vomiting}
+# Check coding & distribution
+table(raw_dat$Admission.Vomiting, useNA = "always")
+
+# Create new variable (with mutually exclusive groups)
+clean_dat <- clean_dat %>%
+  mutate(
+    hx_vomit = factor(
+      case_when(
+        is.na(Admission.Vomiting) ~ NA_character_,
+        grepl("Yes", Admission.Vomiting) &
+          !grepl("YesBl|YesGr", Admission.Vomiting) ~ "yellow",
+        grepl("YesGr", Admission.Vomiting) ~ "bilious",
+        grepl("YesBl", Admission.Vomiting) ~ "bloody",
+        TRUE ~ "no"
+      )
+    ),
+    hx_vomit = fct_relevel(
+      hx_vomit,
+      "no",
+      "yellow",
+      "bilious",
+      "bloody"
+    )
+  )
+
+# Check new variable
+clean_dat %>%
+  select(hx_vomit) %>%
+  summary()
+```
+
+### Maternal history (obstetric history)
+
+The variables to be subset/created from this section are as follows:
+
+Parent variable          | New variable(s)        | Comments
+-------------------------|------------------------|----------------------------
+Admission.ROMlength      | oh_prom2               | "PROM" (yes/no)
+Admission.RFSepsis       | oh_prom                | "PROM" (yes/no)
+""                       | oh_matfever            | "MF" (yes/no)
+""                       | oh_offliquor           | "OL" (yes/no)
+Both of the above        | co_prom                | "yes" if oh_prom OR oh_prom2 == "yes" (yes/no)
+Admission.ModeDelivery   | oh_delivery            | *takes values* (factor)
+
+#### Admission.ROMlength
+
+Binary categorical variable:
+
+* PROM = ">18 hours"
+* NOPROM = "<18 hours"
+
+No changes made to original data.
+
+N.B. This is one of two PROM-related data points collected:
+
+1. Admission.ROMlength (this variable)
+2. Admission.RFSepsis (categorical variable with one catergory for PROM) - see below
+
+```{r Admission.ROMlength}
+# Check coding & distribution
+table(raw_dat$Admission.ROMlength, useNA = "always")
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(oh_prom2 = factor(
+    case_when(
+      is.na(Admission.ROMlength) ~ NA_character_,
+      Admission.ROMlength == "PROM" ~ "yes",
+      TRUE ~ "no"
+    )
+  ))
+
+# Check new variable
+table(clean_dat$oh_prom2, useNA = "always")
+```
+
+#### Admission.RFSepsis
+
+Categorical variable with seven levels:
+
+* Prolonged rupture of membranes = "PROM more than 18 hrs"
+* Maternal fever during labour = "Maternal fever in labour"
+* Offensive liquor = "Offensive liquor"
+* ~~Prematurity = "Prematurity <37 weeks"~~
+* ~~Prolonged second stage of labour = "Prolonged second stage"~~
+* ~~Born before arrival to hospital = "Born before arrival (BBA)"~~
+* None
+
+Of these, only the first three are candidate predictors for this study. Although
+prematurity is also a candidate predictor, this information is obtained more
+precisely from Admission.Gestation (*see above*).
+
+No changes made to original data.
+
+```{r Admission.RFSepsis}
+# Check coding & distribution
+table(raw_dat$Admission.RFSepsis, useNA = "always")
+
+# Create new variables
+clean_dat <- clean_dat %>%
+  mutate(
+    oh_prom = factor(
+      case_when(
+        is.na(Admission.RFSepsis) ~ NA_character_,
+        grepl("PROM", Admission.RFSepsis) ~ "yes",
+        TRUE ~ "no"
+      )
+    ),
+    oh_matfever = factor(
+      case_when(
+        is.na(Admission.RFSepsis) ~ NA_character_,
+        grepl("MF", Admission.RFSepsis) ~ "yes",
+        TRUE ~ "no"
+      )
+    ),
+    oh_offliquor = factor(
+      case_when(
+        is.na(Admission.RFSepsis) ~ NA_character_,
+        grepl("OL", Admission.RFSepsis) ~ "yes",
+        TRUE ~ "no"
+      )
+    )
+  )
+
+# Check new variables
+clean_dat %>%
+  select(oh_prom, oh_matfever, oh_offliquor) %>%
+  summary()
+```
+
+#### Creating a single variable to capture PROM
+
+As mentioned above, there are two PROM-related data points collected:
+
+1. Admission.ROMlength - now `oh_prom2` from above
+2. `Admission.RFSepsis == "PROM"` - now `oh_prom` from above
+
+Recoded into a single variable with "yes" if either of the above
+variables suggest the presence of PROM.
+
+```{r combine_prom}
+# Compare coding & distribution between both variables
+print("Compare coding & distribution between both PROM variables...")
+clean_dat %>%
+  select(oh_prom, oh_prom2) %>%
+  summary()
+table(clean_dat$oh_prom, clean_dat$oh_prom2)
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(co_prom = factor(
+    case_when(
+      (is.na(oh_prom) & is.na(oh_prom2)) ~ NA_character_,
+      (oh_prom == "yes" | oh_prom2 == "yes") ~ "yes",
+      TRUE ~ "no"
+    )
+  ))
+
+# Check new variable
+print("New combined variable...")
+summary(clean_dat$co_prom)
+```
+
+#### Admission.ModeDelivery
+
+Categorical variable with five levels:
+
+* Emergency caesarean section = "Emergency caesarean section"
+* Elective caesarean section = "Elective caesarean section"
+* Forceps = "Forceps extraction"
+* Spontaneous vaginal delivery = "Spontaneous vaginal delivery"
+* Ventouse = "Vacuum extraction"
+
+No changes made to original data.
+
+```{r Admission.ModeDelivery}
+# Check coding & distribution
+table(raw_dat$Admission.ModeDelivery, useNA = "always")
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(
+    oh_delivery = factor(
+      case_when(
+        is.na(Admission.ModeDelivery) ~ NA_character_,
+        grepl("ECS", Admission.ModeDelivery) ~ "emergencyCS",
+        grepl("ElCS", Admission.ModeDelivery) ~ "electiveCS",
+        grepl("For", Admission.ModeDelivery) ~ "forceps",
+        grepl("Vent", Admission.ModeDelivery) ~ "ventouse",
+        grepl("SVD", Admission.ModeDelivery) ~ "svd",
+      )
+    ),
+    oh_delivery = fct_relevel(
+      oh_delivery,
+      "svd",
+      "electiveCS",
+      "emergencyCS",
+      "forceps",
+      "ventouse"
+    )
+  )
+
+# Check new variable
+clean_dat %>%
+  select(oh_delivery) %>%
+  summary()
+```
+
+
+## Data collected by outcome forms
+
+There are two groups of outcome variables to consider:
+
+1. Participant demographics
+2. Model outcome data
+
+### Participant demographics
+
+The variables to be subset/created from this section are as follows:
+
+Parent variable              | New variable(s)     | Comments
+-----------------------------|---------------------|---------------------------
+Discharge.session            | dis_session         | (string)
+Discharge.NeoTreeID          | dis_uid             | (string)
+Discharge.NeoTreeOutcome     | outcome             | *takes values* (factor)
+Discharge.DateTimeDischarge  | outcome_datetime   | (date-time)
+Discharge.DateTimeDeath      | outcome_datetime   | (date-time)
+*several*                    | adm_dur             | (period)
+
+#### Discharge.NeoTreeID & Discharge.session
+
+String variables.
+
+* Discharge.NeoTreeID = the unique identifier for each baby, automatically
+generated by the Neotree app when a new admission form is created. Entered
+manually by the healthcare worker completing the outcome form.
+* Discharge.NeoTreeID_alphanum = the unique identifier but with non-alphanumeric
+characters removed. Used for record linkage.
+* Discharge.session = a unique number assigned to each row of data when imported
+from the raw JSON files (i.e., `seq_along(1:nrow(data))`). Can be used to merge
+columns from other data frames if required in future analyses.
+
+No changes made to original data.
+
+```{r Discharge.NeoTreeID}
+# Check coding
+head(raw_dat$Discharge.NeoTreeID)
+head(raw_dat$Discharge.NeoTreeID_alphanum)
+head(raw_dat$Discharge.session)
+
+# Create new variables (only need to rename)
+clean_dat <- clean_dat %>%
+  rename(
+    dis_uid = "Discharge.NeoTreeID",
+    dis_session = "Discharge.session"
+  )
+
+# Check new variables
+clean_dat %>%
+  select(dis_uid, dis_session) %>%
+  summary()
+head(clean_dat$dis_uid)
+head(clean_dat$dis_session)
+```
+
+#### Discharge.NeoTreeOutcome
+
+Categorical variable with five levels:
+
+* Discharged = "Discharged"
+* Death = "Died"
+* Transferred within the hospital = "Transferred to other ward"
+* Transferred to another hospital or facility = "Transferred to other hospital"
+* Absconded = "Absconded"
+
+Dichotomised into died/discharged. For this study, we considered a participant
+to be discharged if any outcome other than "death" was recorded.
+
+```{r Discharge.NeoTreeOutcome}
+# Check coding & distribution
+table(raw_dat$Discharge.NeoTreeOutcome, useNA = "always")
+#head(na.omit(raw_dat$Discharge.DateTimeDischarge))
+#head(na.omit(raw_dat$Discharge.DateTimeDeath))
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(outcome = factor(
+    case_when(
+      is.na(Discharge.NeoTreeOutcome) ~ NA_character_,
+      Discharge.NeoTreeOutcome == "NND" ~ "died",
+      TRUE ~ "discharged"
+    )
+  ))
+
+# Check new variable
+clean_dat %>%
+  select(outcome) %>%
+  summary()
+```
+
+#### Discharge.DateTimeDischarge & Discharge.DateTimeDeath
+
+String variables representing dates.
+
+```{r Discharge.DateTimeDischarge}
+# Ensure outcomes and date variables match
+print("Ensure outcome matches date variable recorded...")
+print("Discharge.DateTimeDischarge missing...")
+sum(!is.na(clean_dat$Discharge.DateTimeDischarge))
+print("Discharge.DateTimeDeath missing...")
+sum(!is.na(clean_dat$Discharge.DateTimeDeath))
+print("Both missing...")
+sum(!is.na(clean_dat$Discharge.DateTimeDeath) &
+  !is.na(clean_dat$Discharge.DateTimeDischarge))
+
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(outcome_datetime = case_when(
+    outcome == "died" ~ ymd_hms(
+      Discharge.DateTimeDeath,
+      tz = "Africa/Harare"
+    ),
+    outcome == "discharged" ~ ymd_hms(
+      Discharge.DateTimeDischarge,
+      tz = "Africa/Harare"
+    )
+  ))
+
+# Check new variable
+summary(clean_dat$outcome_datetime)
+```
+
+There are `r sum(!is.na(clean_dat$Discharge.DateTimeDeath) & !is.na(clean_dat$Discharge.DateTimeDischarge))`
+cases where both a discharge date and date of death are recorded. For these, we
+used the date corresponding to the recorded outcome.
+
+#### Admission duration
+
+It is useful to have a variable denoting the admission duration for each
+participant. Calculated from the admission and outcome dates.
+
+```{r adm_dur}
+# Create new variable
+clean_dat <- clean_dat %>%
+  mutate(adm_dur = difftime(
+    outcome_datetime,
+    adm_datetime,
+    units = "days")
+    )
+
+# Check new variable
+summary(as.numeric(clean_dat$adm_dur))
+
+# Explore cases where admission duration is negative
+sum(clean_dat$adm_dur <= 0)
+# View(clean_dat %>% filter(adm_dur <= 0))
+```
+
+There are `r sum(clean_dat$adm_dur <= 0)` cases where admission duration is $\leq$ 0.
+
+* These most likely represent errors when inputting the admission and/or
+  outcome date.
+* Although a tolerance of outcome date $\leq$ 1 day prior to admission date was
+  allowed for record linkage, cases with negative admission durations were
+  excluded from the main analysis because this anomaly questioned the accuracy
+  of some other variables for that participant, e.g., chronological age (which
+  is calculated automatically within the app from birth date-time and admission
+  date-time).
+
+
+## Model outcome data
+
+The primary outcome was early-onset sepsis, defined as sepsis with onset within
+the first 72 hours of life, as diagnosed by the treating consultant neonatologist.
+
+### Supporting variables
+
+The variables required to create the outcome variable are as follows:
+
+Variable                       | Comments
+-------------------------------|-----------------------------------------------
+Discharge.DIAGDIS1             | Primary discharge diagnosis
+Discharge.DIAGDIS1OT           | Free text field if primary discharge diagnosis == "other"
+Discharge.OthProbs             | Other problems during admission
+Discharge.OthProbsOth          | Free text field if other problems == "other"
+Discharge.CauseDeath           | Primary cause of death
+Discharge.CauseDeathOther      | Free text field if primary cause of death == "other"
+Discharge.ContCauseDeath       | Contributory cause(s) of death
+Discharge.ContCauseDeathOth    | Free text field of contributory cause of death == "other"
+
+```{r outcome_supporting}
+# Check coding & distribution
+table(clean_dat$Discharge.DIAGDIS1, useNA = "always")
+table(clean_dat$Discharge.CauseDeath, useNA = "always")
+
+# These are too long to print in full:
+# View(table(clean_dat$Discharge.OthProbs, useNA = "always"))
+# View(table(clean_dat$Discharge.ContCauseDeath, useNA = "always"))
+
+# Ensure all discharges have a discharge diagnosis recorded
+print("Ensure all discharges have discharge diagnosis recorded...")
+sum(clean_dat$outcome == "discharged" & is.na(clean_dat$Discharge.DIAGDIS1))
+sum(clean_dat$outcome == "discharged" & is.na(clean_dat$Discharge.OthProbs))
+# Ensure all deaths have a cause of death recorded
+print("Ensure all deaths have cause of death recorded...")
+sum(clean_dat$outcome == "died" & is.na(clean_dat$Discharge.CauseDeath))
+sum(clean_dat$outcome == "died" & is.na(clean_dat$Discharge.ContCauseDeath))
+
+# Create new variables
+clean_dat <- clean_dat %>%
+  mutate(
+    diagnosis = factor(Discharge.DIAGDIS1),
+    diagnosis_other = Discharge.DIAGDIS1OTH,
+    diagnosis2 = factor(Discharge.OthProbs),
+    diagnosis2_other = Discharge.OthProbsOth,
+    cause_death = factor(Discharge.CauseDeath),
+    cause_death_other = Discharge.CauseDeathOther,
+    cause_death2 = factor(Discharge.ContCauseDeath),
+    cause_death2_other = Discharge.ContribOth
+  )
+
+# Check new  variables
+print("New variables...")
+clean_dat %>%
+  select(
+    diagnosis,
+    diagnosis_other,
+    diagnosis2,
+    diagnosis2_other,
+    cause_death,
+    cause_death_other,
+    cause_death2,
+    cause_death2_other
+  ) %>%
+  summary()
+```
+
+### Outcome variable (early-onset neonatal sepsis)
+
+Binary categorical variable of early-onset sepsis yes/no.
+
+First, we explored the free text fields for variations of "early-onset sepsis"
+that would need to be captured by the outcome variable:
+
+```{r outcome_freetext, echo=TRUE}
+# Explore free text (too long to print in full):
+
+# clean_dat %>%
+#   select(diagnosis_other) %>%
+#   filter(grepl("sep|eons|early", diagnosis_other, ignore.case = T))
+# 
+# clean_dat %>%
+#   select(diagnosis2_other) %>%
+#   filter(grepl("sep|eons|early", diagnosis2_other, ignore.case = T))
+# 
+# clean_dat %>%
+#   select(cause_death_other) %>%
+#   filter(grepl("sep|eons|early", cause_death_other, ignore.case = T))
+# 
+# clean_dat %>%
+#   select(cause_death2_other) %>%
+#   filter(grepl("sep|eons|early", cause_death2_other, ignore.case = T))
+```
+
+Relevant free text entries identified:
+
+Variable                       | Relevant free text entries
+-------------------------------|-----------------------------------------------
+Discharge.DIAGDIS1OT           | *None*
+Discharge.OthProbsOth          | "Early Onset Neonatal Sepsis"
+Discharge.CauseDeathOther      | "Early onset neonatal sepsis", "earlyonset neonatal sepsis"
+Discharge.ContCauseDeathOth    | *None*
+
+N.B. "Risk of sepsis", "unconfirmed sepsis" or "sepsis" were not included.
+
+Next, we created the outcome variable.
+
+```{r outcome_variable, echo=TRUE}
+# Create variable
+clean_dat <- clean_dat %>%
+  mutate(sepsis = factor(
+    case_when(
+      # 1. Discharge diagnosis of EONS:
+      diagnosis == "EONS" ~ "yes",
+      # 2. Other discharge problem includes EONS:
+      grepl("EONS", diagnosis2) ~ "yes",
+      grepl("Early Onset Neonatal Sepsis", diagnosis2_other) ~ "yes",
+      # 3. Cause of death of EONS:
+      cause_death == "EONS" ~ "yes",
+      grepl(
+        "Early onset neonatal sepsis|earlyonset neonatal sepsis",
+        cause_death_other
+      ) ~ "yes",
+      # 4. Contributory cause of death includes EONS:
+      grepl("EONS", cause_death2) ~ "yes",
+      # Else, no diagnosis of EONS:
+      TRUE ~ "no"
+    )
+  ))
+
+# Check new variable
+clean_dat %>%
+  select(sepsis) %>%
+  summary()
+```
+
+
+### Inclusion and exclusion criteria
+
+Our inclusion and exclusion criteria were:
+
+Inclusion criteria               | Exclusion criteria
+---------------------------------|------------------------------
+Chronological age <72 hours      | Not singletons or first-born multiples
+Gestation ≥32+0 weeks at birth   | Died at admission to the unit (HR or RR = 0)
+Birth weight ≥1500 grams         | Major congenital anomalies*
+-                                | Anomalous admission duration (<0 days)
+
+\*Major congenital anomalies included congenital heart defects, open spina
+bifida, gastroschisis or omphalocele, and/or genetic syndromes.
+
+The counts of participants excluded due to each criterion are:
+
+```{r inclusion_criteria}
+inclusion_sum <- tibble(criterion = rep(NA, 7), count = rep(NA_integer_, 7))
+criteria <- c(
+  "Admitted ≥72h of life",
+  "Very premature",
+  "Very low birth weight",
+  "Dead on admission",
+  "Not singleton or first-born multiple",
+  "Major congenital anomaly",
+  "Anomalous admission duration"
+  )
+inclusion_sum[1] <- criteria
+
+# Admitted ≥72h of life
+inclusion_sum[1,2] <- sum(clean_dat$pi_age == "older", na.rm = TRUE)
+# Very premature
+inclusion_sum[2,2] <- sum(clean_dat$pi_gest < 32, na.rm = TRUE)
+# Very low birth weight
+inclusion_sum[3,2] <- sum(clean_dat$et_bw < 1500, na.rm = TRUE)
+# Dead on admission
+inclusion_sum[4,2] <- sum(clean_dat$et_rr == 0 | clean_dat$et_hr == 0, na.rm = TRUE)
+# Not singleton or first-born multiple
+inclusion_sum[5,2] <- sum(
+  clean_dat$pi_type == "twin2" |
+    clean_dat$pi_type == "triplet2" |
+    clean_dat$pi_type == "triplet3",
+  na.rm = TRUE
+)
+# Major congenital anomaly
+inclusion_sum[6,2] <- sum(
+  clean_dat$diagnosis == "CHD" |
+    clean_dat$diagnosis == "G" |
+    clean_dat$diagnosis == "OM" |
+    grepl("CHD|G|OM", clean_dat$diagnosis2) |
+    clean_dat$cause_death == "CA" |
+    clean_dat$cause_death == "Gastro" |
+    grepl("CHD|G|OM", clean_dat$cause_death2) |
+    grepl(
+      "meningo|trisomy 13/18|omphalo|mmc|complex heart|ancephalocele",
+      clean_dat$diagnosis_other,
+      ignore.case = TRUE
+    ) |
+    grepl(
+      "meningo|encephalo|spina bifida|acyanotic chd|fallot|mmc",
+      clean_dat$diagnosis2_other,
+      ignore.case = TRUE
+    ) |
+    grepl(
+      "omphalo|gastroschisis|neural tube defect|multiple abnormalities",
+      clean_dat$cause_death_other,
+      ignore.case = TRUE
+    ) |
+    grepl(
+      "congenital cardio resp disease",
+      clean_dat$cause_death2_other,
+      ignore.case = TRUE
+    ),
+  na.rm = TRUE
+)
+# Anomalous admission duration
+inclusion_sum[7,2] <- sum(clean_dat$adm_dur < 0, na.rm = TRUE)
+
+inclusion_sum
+```
+
+### Flow diagram of participant inclusion
+
+![](../Figures/inclusion_flow.png){width=60%}
+

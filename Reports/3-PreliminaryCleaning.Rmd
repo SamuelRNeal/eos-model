@@ -1,0 +1,213 @@
+---
+title: "3-PreliminaryCleaning"
+output:
+  pdf_document:
+    number_sections: yes
+    df_print: tibble
+    latex_engine: xelatex
+---
+
+```{r setup3, include=FALSE}
+library("knitr")
+knitr::opts_chunk$set(echo = FALSE)
+# Set root directory from Rmd dir to project dir
+opts_knit$set(root.dir = "..")
+```
+
+```{r libraries3, include=FALSE}
+source("Scripts/0-setup.R")
+```
+
+```{r data3, include=FALSE}
+# Load data --------------------
+adm <- readRDS("Data/import_adm.rds")
+dis <- readRDS("Data/import_dis.rds")
+```
+
+We applied several preliminary cleaning steps to the raw imported data.
+
+* Number of rows in raw admission data frame = `r nrow(adm)`
+* Number of rows in raw outcome data frame = `r nrow(dis)`
+
+## Removing duplicate entries
+
+We defined exact duplicates as entries where values for all variables were
+identical to one or more other entries. This occurs when data are exported from
+a study tablet before previous data have been erased, resulting in some entries
+being exported in duplicate.
+
+Number of duplicate entries:
+
+```{r prelim1, cache=TRUE}
+tibble(
+  form = c("admission", "outcome"),
+  duplicates = c(
+    sum(duplicated(adm[, 2:ncol(adm)])),
+    sum(duplicated(dis[, 2:ncol(dis)]))
+  )
+)
+
+adm <- adm %>% filter(!duplicated(.[, 2:ncol(.)]))
+dis <- dis %>% filter(!duplicated(.[, 2:ncol(.)]))
+```
+
+## Recoding missing values
+
+We recoded empty cells or cells containing strings that signify missingness as
+missing values using the following custom function:
+
+```{r prelim2}
+recodeMissing
+
+adm <- adm %>% mutate(across(everything(), recodeMissing))
+dis <- dis %>% mutate(across(everything(), recodeMissing))
+```
+
+## Standardising variables between admission & outcome forms
+
+We standardised `mode of delivery` and `sex` between admission and outcome forms,
+so they can be used for record linkage.
+
+Labels before standardisation:
+
+```{r prelim3}
+list(
+  "Mode of delivery (admission)" = levels(factor(adm$Admission.ModeDelivery)),
+  "Mode of delivery (outcome)" = levels(factor(dis$Discharge.Delivery)),
+  "Sex (admission)" = levels(factor(adm$Admission.Gender)),
+  "Sex (outcome)" = levels(factor(dis$Discharge.SexDis))
+)
+```
+
+Labels after standardisation:
+
+```{r prelim4}
+adm <- adm %>%
+  mutate(
+    Admission.ModeDelivery = recode(
+      Admission.ModeDelivery,
+      "1" = "SVD",
+      "2" = "Vent",
+      "3" = "For",
+      "4" = "ElCS",
+      "5" = "ECS",
+      "6" = "SVD"
+    ),
+    Admission.Gender = recode(Admission.Gender, "NS" = "U")
+  )
+
+list(
+  "Mode of delivery (admission)" = levels(factor(adm$Admission.ModeDelivery)),
+  "Mode of delivery (outcome)" = levels(factor(dis$Discharge.Delivery)),
+  "Sex (admission)" = levels(factor(adm$Admission.Gender)),
+  "Sex (outcome)" = levels(factor(dis$Discharge.SexDis))
+)
+```
+
+## Removing entries without a healthcare worker identifier
+
+We removed entries that had not been ‘signed off’ by a healthcare worker with
+their healthcare worker identifier (HCW ID) (commonly their initials). Entries
+without a HCW ID occur for several reasons, e.g. (1) a healthcare worker
+accidentally exits the app and starts a new form upon reopening it; (2) a
+healthcare worker is demonstrating how to use the app to another user so does
+not want to mark the form as a genuine entry.
+
+Number of entries without a HCW ID:
+
+```{r prelim5}
+tibble(
+  form = c("admission", "outcome"),
+  "no HCW ID" = c(
+    sum(is.na(adm$Admission.HCWID)),
+    sum(is.na(dis$Discharge.HCWIDDis))
+  )
+)
+
+adm <- adm %>% filter(!is.na(.$Admission.HCWID))
+dis <- dis %>% filter(!is.na(.$Discharge.HCWIDDis))
+```
+
+## Removing outcome form entries with invalid unique identifiers
+
+Invalid UIDs were:
+
+```{r prelim6}
+adm <- adm %>%
+  mutate(
+    Admission.UID_alphanum =
+      gsub("[^a-zA-Z0-9]", "", adm$Admission.UID)
+  )
+
+dis <- dis %>%
+  mutate(
+    Discharge.NeoTreeID_alphanum =
+      gsub("[^a-zA-Z0-9]", "", dis$Discharge.NeoTreeID)
+  )
+
+tibble(
+  format = c(
+    "missing values",
+    "strings of only zeros",
+    "strings shorter than 4 characters long",
+    "strings containing words"
+    ),
+  freq = c(
+    sum(is.na(dis$Discharge.NeoTreeID_alphanum)),
+    sum(grepl("^(0)\\1{0,}$", dis$Discharge.NeoTreeID_alphanum)),
+    sum(nchar(dis$Discharge.NeoTreeID_alphanum) < 4, na.rm = TRUE),
+    sum(
+      grepl("twin", dis$Discharge.NeoTreeID_alphanum) | 
+        grepl("and", dis$Discharge.NeoTreeID_alphanum)
+      )
+    )
+)
+
+dis <- dis %>%
+  filter(
+    !is.na(.$Discharge.NeoTreeID_alphanum),
+    !grepl("^(0)\\1{0,}$", .$Discharge.NeoTreeID_alphanum),
+    # "^(0)\\1{0,}$" finds strings of just zeros
+    !nchar(.$Discharge.NeoTreeID_alphanum) < 4,
+    !grepl("twin", .$Discharge.NeoTreeID_alphanum),
+    !grepl("and", .$Discharge.NeoTreeID_alphanum)
+  )
+```
+
+## Limiting entries to the study period 
+
+We removed entries outwith the study period. This included entries prior to
+01/02/2019, which constituted the 'pilot period' of data collection for the
+Neotree at SMCH.
+
+```{r prelim7, include=FALSE}
+adm <- adm %>%
+  filter(
+    ymd_hms(
+      Admission.DateTimeAdmission,
+      tz = "Africa/Harare"
+    ) >= "2019-02-01"
+  )
+
+dis <- dis %>%
+  filter(
+    ymd_hms(
+      Discharge.DateTimeDischarge,
+      tz = "Africa/Harare"
+    ) >= "2019-02-01" |
+      ymd_hms(
+        Discharge.DateTimeDeath,
+        tz = "Africa/Harare"
+      ) >= "2019-02-01"
+  )
+```
+
+Data import and preliminary cleaning resulted in one data frame for admission
+forms and one data frame for outcome forms.
+
+* Number of rows in final admission data frame = `r nrow(adm)`
+* Number of rows in final outcome data frame = `r nrow(dis)`
+
+## Flow diagram
+
+![Flow diagram summarising preliminary data cleaning](../Figures/preliminary_cleaning_flow.png){width=70%}

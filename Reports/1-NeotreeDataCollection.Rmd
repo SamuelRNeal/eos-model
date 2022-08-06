@@ -1,0 +1,37 @@
+---
+title: "1-NeotreeDataCollecton"
+output:
+  pdf_document:
+    number_sections: yes
+    df_print: tibble
+    latex_engine: xelatex
+---
+
+```{r setup1, include=FALSE}
+library("knitr")
+knitr::opts_chunk$set(echo = FALSE)
+# Set root directory from Rmd dir to project dir
+opts_knit$set(root.dir = "..")
+```
+
+## Example screens from the Neotree app
+
+Below are example screens from the Neotree app showing data capture
+and integrated education on neonatal care.
+
+\vspace{12pt}
+
+![](../Figures/NT1.jpeg){width=25%}
+![](../Figures/NT2.jpeg){width=25%}
+![](../Figures/NT3.jpeg){width=25%}
+
+## Neotree data pipeline at Sally Mugabe Central Hospital
+
+The below flow diagram summarises the current Neotree data pipeline.
+
+\vspace{12pt}
+
+![](../Figures/NeotreeDataFlow.png){width=80%}
+
+*Reprinted from Heys et al. 2022 (Learning Health Systems, DOI: 10.1002/lrh2.10310)
+in accordance with the CC BY 4.0 license.*
