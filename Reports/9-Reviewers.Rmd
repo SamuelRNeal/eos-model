@@ -1,0 +1,376 @@
+---
+title: "9-Reviewers"
+output:
+  pdf_document:
+    number_sections: yes
+    df_print: tibble
+    latex_engine: xelatex
+---
+
+```{r setup9, include=FALSE}
+library("knitr")
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, out.width="60%")
+# Set root directory from Rmd dir to project dir
+opts_knit$set(root.dir = "..") 
+```
+
+```{r libraries9, include=FALSE}
+source("Scripts/0-setup.R")
+```
+
+```{r data9, include=FALSE}
+incl_adm <- readRDS("Data/prepare2_dat.rds") %>% pull(adm_session)
+incl_dis <- readRDS("Data/prepare2_dat.rds") %>% pull(dis_session)
+
+adm <- readRDS("Data/prepare1_adm.rds") %>%
+  filter(Admission.session %in% incl_adm)
+dis <- readRDS("Data/prepare1_dis.rds") %>%
+  filter(Discharge.session %in% incl_dis)
+```
+
+Additional analyses in response to reviewers' comments.
+
+## Source of admission
+
+The below figure shows the source of admission for neonates included in our study.
+
+```{r adm_source}
+adm_source <- adm %>% select(Admission.AdmittedFrom)
+adm_tbl <- table(adm_source)
+# proportions(adm_tbl)*100 # excludes NA data
+# adm_tbl
+miss_n <- sum(is.na(adm_source))
+miss_p <- sum(is.na(adm_source))/nrow(adm_source)*100
+
+adm_source_plot <- adm_source %>% 
+  mutate(Admission.AdmittedFrom = fct_recode(
+    Admission.AdmittedFrom,
+    "admissions" = "ADM",
+    "antenatal ward" = "ANC",
+    "labour ward" = "LW",
+    "postnatal ward" = "PNW",
+    "theatre" = "TH"
+    )) %>%
+  mutate(Admission.AdmittedFrom = reorder(
+    Admission.AdmittedFrom,
+    Admission.AdmittedFrom,
+    function(x) -length(x)
+    )) %>%
+  filter(!is.na(Admission.AdmittedFrom)) %>%
+  ggplot(aes(x = Admission.AdmittedFrom)) +
+  geom_bar(aes(y = after_stat(prop), group = 1)) +
+  scale_y_continuous(labels = percent_format(accuracy = 1), limits = c(0, .6)) +
+  labs(
+    x = "Source of admission",
+    y = "Proportion",
+    caption = paste0(
+      "*Excluding missing data (n=",
+      miss_n, ", ", round(miss_p, 0), "%)")
+    ) +
+  theme_classic2() +
+  theme(axis.text.x = element_text(angle = 45,  hjust = 1, vjust = 1)) +
+  NULL
+adm_source_plot # excludes NA data
+```
+
+## Antibiotic usage
+
+The below figure shows the distribution of antibiotic usage for neonates
+included in our study.
+
+```{r abx_usage}
+# Available antibiotics as per data dictionary
+abx <- list("BP", "GENT", "AMOX", "AMIK", "AMP", "CEF", "CLOX", "IMI",
+            "MET", "PROC", "VAN") # excludes chloramphenicol
+# sum(is.na(dis$Discharge.MedsGiven)) #=0
+
+abx_usage <- dis %>%
+  select(Discharge.session, Discharge.MedsGiven) %>%
+  mutate(
+    benzypenicillin = if_else(grepl("BP", Discharge.MedsGiven), 1, 0),
+    gentamicin = if_else(grepl("GENT", Discharge.MedsGiven), 1, 0),
+    amoxicillin = if_else(grepl("AMOX", Discharge.MedsGiven), 1, 0),
+    amikacin = if_else(grepl("AMIK", Discharge.MedsGiven), 1, 0),
+    ampicillin = if_else(grepl("AMP", Discharge.MedsGiven), 1, 0),
+    ceftrixone = if_else(grepl("CEF", Discharge.MedsGiven), 1, 0),
+    cloxicallin = if_else(grepl("CLOX", Discharge.MedsGiven), 1, 0),
+    imipenem = if_else(grepl("IMI", Discharge.MedsGiven), 1, 0),
+    metronidazole = if_else(grepl("MET", Discharge.MedsGiven), 1, 0),
+    `procaine pencillin` = if_else(grepl("PROC", Discharge.MedsGiven), 1, 0),
+    vancomycin = if_else(grepl("VAN", Discharge.MedsGiven), 1, 0)
+  ) %>%
+  select(-Discharge.MedsGiven)
+
+abx_tbl <- abx_usage %>%
+  mutate(across(-Discharge.session, ~ sum(.))) %>%
+  select(-Discharge.session) %>%
+  unique() %>%
+  pivot_longer(everything())
+# abx_tbl %>% arrange(desc(value))
+
+abx_plot <- abx_tbl %>%
+  ggplot(aes(x = fct_rev(fct_reorder(name, value)), y = value)) +
+  geom_col() +
+  labs(
+    x = "Antibiotic",
+    y = "Number of neonates") +
+  theme_classic2() +
+  theme(axis.text.x = element_text(angle = 45,  hjust = 1, vjust = 1)) +
+  NULL
+abx_plot
+```
+
+Below is the distribution of antibiotic usage for those with and without EOS.
+
+```{r abx_usage2}
+# sum(rowSums(abx_usage == 1) > 0) # received abx during admission
+# sum(rowSums(abx_usage == 1) > 0)/nrow(dis)*100 # = percentage prescribed abx
+
+# Chi-sq test for abx use x sepsis to include in Table 1
+a <- abx_usage %>% mutate(abx = if_else(rowSums(. == 1) > 0, 1, 0)) %>%
+  select(Discharge.session, abx) %>%
+  rename(dis_session = Discharge.session)
+b <- readRDS("Data/prepare2_dat.rds") %>% select(dis_session, sepsis)
+abx_dat <- merge(a, b, by = "dis_session")
+# nrow(abx_dat)
+
+table("abx (n)" = abx_dat$abx, "sepsis (n)" = abx_dat$sepsis)
+round(prop.table(table("abx (%)" = abx_dat$abx, "sepsis (%)" = abx_dat$sepsis), margin = 2)*100, 0)
+chisq.test(table(abx_dat$abx, abx_dat$sepsis))
+```
+
+
+## Characteristics of neonates in whom sepsis 'missed' by model
+
+The table below compares characteristics between those with EOS who were classified
+as EOS by our model (true positives) and those with EOS who were classified as 'no EOS'
+by our model (false negatives, i.e. 'missed' EOS) at the optimal classification threshold
+determined by Youden's _J_ statistic (0.121).
+
+```{r sepsis_missed}
+si <- readRDS("Data/si.rds")
+pred_si <- readRDS("Data/pred_si.rds") # predictions from model
+thresopt <- 0.121
+
+si <- si %>%
+  mutate(sepsis_pred = if_else(pred_si > thresopt, "yes", "no")) %>%
+  mutate(missed = if_else(sepsis == "yes" & sepsis_pred == "no", 1, 0))
+# table(si$missed)
+
+# should be same order in both df (excluding missing values)
+missed_dat <- readRDS("Data/prepare2_dat.rds") %>%
+  mutate(et_bw = et_bw/1000,
+         oh_delivery = fct_recode(
+           oh_delivery,
+           instrumental = "forceps",
+           instrumental = "ventouse"
+))
+# just to make sure
+# missed_dat$et_bw[!mapply(identical, si$et_bw, missed_dat$et_bw)]
+# only the missing values = this is OK
+
+missed_dat <- missed_dat %>% mutate(missed = si$missed)
+
+t1_vars <- c(
+  "pi_sex",
+  "pi_gest",
+  "et_bw",
+  "pi_age",
+  "pi_type",
+  "oh_delivery",
+  "adm_dur",
+  "outcome",
+  "sepsis",
+  "missed"
+)
+
+missed_labels <- list(
+  pi_gest ~ "Gestational age",
+  et_bw ~ "Birth weight",
+  adm_dur ~ "Admission duration",
+  pi_sex ~ "Sex",
+  pi_age ~ "Chronological age",
+  pi_type ~ "Type of birth",
+  oh_delivery ~ "Mode of delivery",
+  outcome ~ "Death"
+)
+
+missed_dat %>%
+  mutate(outcome = if_else(outcome == "died", 1, 0)) %>%
+  select(all_of(t1_vars)) %>%
+  filter(sepsis == "yes") %>% # just compare those with sepsis who were missed vs. not missed
+  tbl_summary(
+    by = missed,
+    statistic = list(
+      c(pi_gest, et_bw) ~ "{mean} ({sd})",
+      adm_dur ~ "{median} [{p25}-{p75}]",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    label = missed_labels,
+    missing = "no"
+  ) %>%
+  add_p(
+    test = list(
+      c(pi_gest, et_bw) ~ "t.test",
+      adm_dur ~ "wilcox.test",
+      all_categorical() ~ "fisher.test"
+    )
+  ) %>%
+  add_overall() %>%
+  add_stat_label(
+    label = list(
+      pi_gest ~ "mean weeks (SD)",
+      et_bw ~ "mean grams (SD)",
+      adm_dur ~ "median days [Q1-Q3]",
+      all_categorical() ~ "n (%)"
+    )
+  ) %>%
+  modify_footnote(update = everything() ~ NA) %>%
+  as_kable_extra() # %>% # to allow table to print in PDF output
+
+```
+
+
+## Reasons for admission
+
+The below figure shows the reasons for admission of neonates included in our study.
+
+```{r adm _reason}
+# R2.5 - Reasons for admission --------------------
+
+adm_reason <- adm %>%
+  select(Admission.AdmReason) %>%
+  mutate(
+    Admission.AdmReason = fct_recode(
+      Admission.AdmReason,
+      "abdominal distention" = "AD",
+      "low apgars" = "Apg",
+      "HIE" = "BA",
+      "born before arrival" = "BBA",
+      "congenital anomaly" = "Cong",
+      "convulsions" = "Conv",
+      "resp distress" = "DIB",
+      "abandoned" = "DU",
+      "feeding difficulty" = "FD",
+      "fever" = "Fev",
+      "gastroschisis" = "G",
+      "HIV exposed" = "HIVX",
+      "jaundice" = "J",
+      "low birth weight" = "LBW",
+      "macrosomia" = "Mac",
+      "meconium" = "Mec",
+      "neural tube defect" = "NTD",
+      "other" = "O",
+      "omphalocele" = "OM",
+      "prematurity" = "Prem",
+      "prematurity with resp distress" = "PremRDS",
+      "risk of sepsis" = "Risk",
+      "safekeeping" = "Safe",
+  )
+)
+
+# table(adm_reason$Admission.AdmReason)
+
+adm_reason_plot <- adm_reason %>%
+  mutate(Admission.AdmReason = reorder(
+    Admission.AdmReason,
+    Admission.AdmReason,
+    function(x) length(x)
+  )) %>%
+  ggplot(aes(x = Admission.AdmReason)) +
+  geom_bar() +
+  coord_flip() +
+  labs(
+    x = "Admission reason",
+    y = "Number of neonates") +
+  theme_classic2() +
+  NULL
+adm_reason_plot
+```
+
+
+## Sample size calculations
+
+The below code shows post hoc sample size calculations as per Riley _et al._ BMJ 2020
+(doi: https://doi.org/10.1136/bmj.m441).
+
+```{r sample_size, echo=TRUE}
+# a. estimate the overall outcome proportion with sufficient precision
+# aiming for margin of error \leq 0.05
+outprop <- sum(si$sepsis == "yes")/nrow(si) #outcome proportion
+(1.96 / 0.05)^2 * outprop*(1-outprop) #=154
+
+# b. target a small mean absolute prediction error (p \leq 30)
+n <- nrow(si) #sample size of development dataset
+P <- 9 #number of candidate predictor parameters
+MAPE <- 0.05 #mean absolute prediction error
+exp((-0.508 + 0.259*log(outprop) + 0.504*log(P) - log(MAPE))/0.544) #=263 for MAPE 0.05
+
+# c. target a shrinkage factor of 0.9
+# (although shrinkage not used in our study)
+S <- 0.9 #target shrinkage factor of 10%
+R2CS <- 0.1 #anticipated R2(CS) of at least 0.1
+P / ((S-1) * log(1 - (R2CS/S))) #=764
+
+# d. target small optimism of 0.05 in the apparent R2(Nagelkerke)
+lnLnull <- (outprop*n)*log(outprop*n/n) + (n - outprop*n)*log(1 - outprop*n/n)
+maxR2CS <- 1 - exp(2*lnLnull / n) #maximum possible value of R2CS
+S2 <- R2CS / (R2CS + 0.05*maxR2CS) #assuming expected optimism \leq 0.05
+P / ((S2 - 1)*log(1 - R2CS/S2)) #=333
+```
+
+
+## Model calibration
+
+The below statistics and figure shows calibration of our optimal model with a
+flexible calibration curve using a loess smoother.
+
+```{r calibration, warning=FALSE}
+si <- readRDS("Data/si.rds")
+pred_si <- readRDS("Data/pred_si.rds")
+cal_stats <- CalibrationCurves::valProbggplot(
+  pred_si, if_else(si$sepsis == "yes", 1, 0),
+  dostats = c("Intercept", "Slope"), #simplifies label of intercept/slope
+  col.smooth = "red",
+  col.ideal = "black",
+  lwd.ideal = 0.5,
+  size = 4
+)
+cal_stats$stats
+
+cal_plot<- cal_stats$ggPlot +
+  theme_classic2() +
+  theme(legend.position = "top") +
+  NULL
+
+cal_violin <- ggplot(si, aes(x = if_else(sepsis == "yes", 1, 0), y = !!pred_si, fill = sepsis)) +
+  geom_violin(colour = "black") +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0,1,.25)) +
+  scale_x_continuous(breaks = c(0, 1)) +
+  scale_fill_manual(values = c("grey", hcl(0, 100, 40)),
+                    guide = guide_legend(reverse = T)) +
+  new_scale_fill() +
+  geom_boxplot(fill = "white", width = .15, outlier.shape = 1) +
+  labs(y = "Predicted probability of sepsis", x = "Observed case of sepsis",
+       fill = "Observed sepsis: ") +
+  coord_flip() +
+  annotate("text", x = 0, y = .9, label = "0") + 
+  annotate("text", x = 1, y = .9, label = "1") + 
+  theme_classic2() +
+  theme(axis.ticks=element_blank(),
+        axis.title=element_blank(),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        legend.position="none",
+        panel.background=element_blank(),
+        plot.margin = margin(5.5,5.5,5.5,47, "pt")) +
+  NULL
+
+cal_fig <- plot_grid(cal_plot, cal_violin, nrow = 2, rel_heights = c(4,1))
+cal_fig
+
+ggsave("Figures/calibration_fig.png", cal_fig, width = 5, height = 5, dpi = 300)
+```
+

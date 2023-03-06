@@ -100,6 +100,7 @@ rand <- floor(runif(1, min = 1, max = 30))
 rand
 
 si <- as_tibble(complete(imp, rand))
+saveRDS(si, "Data/si.rds")
 ```
 
 ### Assess linearity assumption
@@ -724,6 +725,7 @@ number `r rand`) is shown below.
 ```{r performance_si}
 # Predict on the single imputation
 pred_si <- predict(M7, newdata = si, type = "response")
+saveRDS(pred_si, "Data/pred_si.rds")
 
 roc_si <- pROC::roc(
   sepsis ~ pred_si,
@@ -732,6 +734,7 @@ roc_si <- pROC::roc(
   print.auc = TRUE,
   ci = TRUE
   )
+saveRDS(roc_si, "Data/roc_si.rds")
 ```
 
 We calculated Yates' discrimination slope as the absolute difference in mean

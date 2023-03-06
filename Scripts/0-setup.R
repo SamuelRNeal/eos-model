@@ -33,6 +33,7 @@ library(scales)
 library(ggpubr)
 library(RColorBrewer)
 library(stevetemplates)
+library(ggnewscale)
 
 # Modelling
 library(pROC) # ROC curves
@@ -47,4 +48,5 @@ library(gt)
 library(boot)
 
 # Presentation of results
-library(CalibrationCurves) # from github
+# devtools::install_github("BavoDC/CalibrationCurves", dependencies = TRUE)
+library(CalibrationCurves)

@@ -2,7 +2,7 @@
 title: "Supplementary Methods & Results"
 subtitle: "Diagnosing early-onset neonatal sepsis in low-resource settings: development of a multivariable prediction model"
 author: "Neal SR et al."
-date: "06/08/2022"
+date: "02/03/2023"
 output:
   pdf_document:
     latex_engine: xelatex
@@ -19,6 +19,10 @@ header-includes:
   - \usepackage{longtable}
   - \usepackage{afterpage}
 ---
+
+\vspace{30pt}
+
+Some supplementary data have been redacted or replaced by fictitious examples (where indicated) to remove identifying information for publication. 
 
 \newpage
 
@@ -76,4 +80,9 @@ header-includes:
 ```{r child="8-Modelling.Rmd"}
 ```
 
+\newpage
 
+# Additional analyses for reviewers' comments
+
+```{r child="9-Reviewers.Rmd"}
+```
