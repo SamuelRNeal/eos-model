@@ -140,7 +140,7 @@ print("Cases where RR <20")
 clean_dat %>%
   select(
     Admission.RR,
-    Admission.Gestation,
+    # Admission.Gestation,
     Admission.Resus,
     Discharge.NeoTreeOutcome
   ) %>%
@@ -202,9 +202,9 @@ clean_dat %>%
   select(
     Admission.HR,
     Admission.RR,
+    # Admission.Gestation,
     Admission.Resus,
-    Discharge.NeoTreeOutcome,
-    Admission.Gestation
+    Discharge.NeoTreeOutcome
   ) %>%
   mutate(Admission.HR = as.numeric(Admission.HR)) %>%
   filter(Admission.HR < 50) %>%
@@ -276,13 +276,13 @@ head(table(as.numeric(raw_dat$Admission.AW)), 21)
 print("Cases where BW or AW <500g")
 raw_dat %>%
   select(
-    Admission.session,
+    # Admission.session,
     Admission.BW,
-    Admission.AW,
-    Admission.Gestation,
-    Admission.AgeB,
-    Admission.AdmReason,
-    Discharge.NeoTreeOutcome
+    Admission.AW # ,
+    # Admission.Gestation,
+    # Admission.AgeB,
+    # Admission.AdmReason,
+    # Discharge.NeoTreeOutcome
   ) %>%
   mutate(
     Admission.BW = as.numeric(Admission.BW),
@@ -307,10 +307,10 @@ sum(is.na(raw_dat$Admission.BW) & !is.na(raw_dat$Admission.AW))
 print("Cases where BW and AW differ (and AW not missing)")
 raw_dat %>%
   select(
-    Admission.session,
+    # Admission.session,
     Admission.BW,
-    Admission.AW,
-    Admission.AgeB
+    Admission.AW # ,
+    # Admission.AgeB
   ) %>%
   mutate(
     Admission.BW = as.numeric(Admission.BW),
@@ -407,12 +407,12 @@ columns from the other data frames if needed in later analyses.
 
 ```{r Admission.UID}
 # Check coding
-print("Admission.UID")
-head(raw_dat$Admission.UID)
-print("Admission.UID_alphanum")
-head(raw_dat$Admission.UID_alphanum)
-print("Admission.session")
-head(raw_dat$Admission.session)
+# print("Admission.UID")
+# head(raw_dat$Admission.UID)
+# print("Admission.UID_alphanum")
+# head(raw_dat$Admission.UID_alphanum)
+# print("Admission.session")
+# head(raw_dat$Admission.session)
 
 # Create new variables (only need to rename)
 clean_dat <- clean_dat %>%
@@ -430,12 +430,11 @@ String variable representing a date. Converted to POSIXct object.
     + During this period, healthcare workers were becoming accustomed to the
     Neotree app and only a subset of admissions and outcomes were recorded.
 
-```{r Admission.DateTimeAdmission}
+```{r Admission.DateTimeAdmission, message=FALSE}
 # Check coding
-head(raw_dat$Admission.DateTimeAdmission)
+# head(raw_dat$Admission.DateTimeAdmission)
 
 # Create new variable
-print("New variable")
 clean_dat <- clean_dat %>%
   mutate(
     adm_datetime = ymd_hms(
@@ -445,9 +444,9 @@ clean_dat <- clean_dat %>%
   )
 
 # Check new variable
-clean_dat %>%
-  select(adm_datetime) %>%
-  summary()
+# clean_dat %>%
+#   select(adm_datetime) %>%
+#   summary()
 #head(clean_dat$adm_datetime)
 
 # Bar graph of admissions per month
@@ -1400,9 +1399,9 @@ No changes made to original data.
 
 ```{r Discharge.NeoTreeID}
 # Check coding
-head(raw_dat$Discharge.NeoTreeID)
-head(raw_dat$Discharge.NeoTreeID_alphanum)
-head(raw_dat$Discharge.session)
+# head(raw_dat$Discharge.NeoTreeID)
+# head(raw_dat$Discharge.NeoTreeID_alphanum)
+# head(raw_dat$Discharge.session)
 
 # Create new variables (only need to rename)
 clean_dat <- clean_dat %>%
@@ -1415,8 +1414,8 @@ clean_dat <- clean_dat %>%
 clean_dat %>%
   select(dis_uid, dis_session) %>%
   summary()
-head(clean_dat$dis_uid)
-head(clean_dat$dis_session)
+# head(clean_dat$dis_uid)
+# head(clean_dat$dis_session)
 ```
 
 #### Discharge.NeoTreeOutcome
@@ -1458,7 +1457,7 @@ clean_dat %>%
 
 String variables representing dates.
 
-```{r Discharge.DateTimeDischarge}
+```{r Discharge.DateTimeDischarge, message=FALSE}
 # Ensure outcomes and date variables match
 print("Ensure outcome matches date variable recorded...")
 print("Discharge.DateTimeDischarge missing...")
@@ -1483,7 +1482,7 @@ clean_dat <- clean_dat %>%
   ))
 
 # Check new variable
-summary(clean_dat$outcome_datetime)
+# summary(clean_dat$outcome_datetime)
 ```
 
 There are `r sum(!is.na(clean_dat$Discharge.DateTimeDeath) & !is.na(clean_dat$Discharge.DateTimeDischarge))`

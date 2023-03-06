@@ -128,28 +128,17 @@ long and laborious to type and, hence, prone to error. Therefore, most outcome
 form UIDs are 6 characters long, except those from the first month of the project.
 To avoid confusion, we used a substring of the full UIDs (called `uidsub`) for
 linkage. This substring consists of the first 3 and last 3 characters of the UID,
-converted to lowercase. E.g.,
+converted to lowercase. E.g. (fictitious example),
 
-```{r uid}
+```{r uid_example}
+# Fictitious example
 cbind(
-  full = adm %>%
-    pull(Admission.UID_alphanum) %>%
-    head(),
-  uidsub = adm %>%
-    select(uid = Admission.UID_alphanum) %>%
-    mutate(
-      first = substr(.$uid, 1, 3),
-      last = substr(.$uid, nchar(.$uid)-2, nchar(.$uid)),
-      uidsub = tolower(paste0(first, last))
-    ) %>%
-    pull(uidsub) %>%
-    head()
+  full = c("AB123456", "AB789012"),
+  uidsub = c("ab1456", "ab7012")
 )
 ```
 
 ### Linkage data frames
-
-Below is the head of the data frames for record linkage:
 
 ```{r link_dfs}
 # Create the admission form linkage data frame
@@ -193,11 +182,43 @@ dis_link <- dis %>%
     ) %>%
   select(-c(uid, first, last))
 
+# list(
+#   admission = head(adm_link),
+#   outcome = head(dis_link)
+# )
+```
+
+Below is a fictitious example of the data frame structure for record linkage:
+
+```{r link_dfs_example}
+adm_link_eg <- tibble(
+  bw = c("3000", "4000", "1800", "3500"),
+  gest = c("41", "40", "35", "40"),
+  ofc = c("32", "37", "31", "33"),
+  length = c("46", "46", "44", "48"),
+  mode = c("SVD", "ECS", "SVD", "SVD"),
+  sex = c("M", "F", "F", "M"),
+  session = c("session 10000", "session 10001", "session 10002", "session 10003"),
+  uidsub = c("ab1789", "ab2567", "ab3689", "ab1478")
+)
+
+dis_link_eg <- tibble(
+  bw = c("3320", "1900", "1900", "1300"),
+  gest = c(NA, '32', "34", "32"),
+  ofc = c("32", "32", "30", "29"),
+  length = c("48", "47", "45", "39"),
+  mode = c("SVD", "ECS", "SVD", "ECS"),
+  sex = c("F", "F", "M", "M"),
+  session = c("session 100000", "session 100001", "session 100002", "session 100003"),
+  uidsub = c("cd3567", "cd1378", "cd8364", "cd9246")
+)
+
 list(
-  admission = head(adm_link),
-  outcome = head(dis_link)
+  admission = head(adm_link_eg),
+  outcome = head(dis_link_eg)
 )
 ```
+
 
 ## Perform record linkage
 
@@ -574,11 +595,11 @@ dataset.
 * Duplicated admission UIDs: _n_ = `r sum(duplicated(dat$Admission.UID_alphanum))`
 * Duplicated outcome UIDs: _n_ = `r sum(duplicated(dat$Discharge.NeoTreeID_alphanum))`
 
-Looking at an extract from these duplicates, it is clear that they are unique
+Looking at an extract from these duplicates, it was clear that they are unique
 babies with, for example, different birth weights, gestational ages, admission
-reasons, discharge diagnosis or outcome despite the same UID:
+reasons, discharge diagnosis or outcome despite the same UID.
 
-```{r quality}
+```{r quality, include=FALSE}
 # View the head of these duplicates
 dat %>%
   filter(
