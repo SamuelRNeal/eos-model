@@ -3,7 +3,7 @@
 Samuel R. Neal, MRes; Gwendoline Chimhini, MMED; Felicity Fitzgerald, PhD;
 Simbarashe Chimhuya, MMED; Mario Cortina-Borja, PhD; Michelle Heys, MD(Res)
 
-**Correspondence to:** Dr Felicity Fitzgerald, felicity.fitzgerald@ucl.ac.uk   
+**Correspondence to:** Dr Michelle Heys, m.heys@ucl.ac.uk   
 **Code queries to:** Dr Samuel Neal, samuel.neal.19@ucl.ac.uk
 
 ## Data
